@@ -19,11 +19,13 @@ $env:PATH="$env:PATH;D:\Rust\mingw64\mingw64\bin;D:\Rust\cargo\bin"
 
 Sin esto, `cargo` no aparece: Rust no esta en el PATH del sistema.
 
-Restricciones del equipo: ~1 GB de RAM, target `x86_64-pc-windows-gnu`, MinGW GCC 16.2.
-`.cargo/config.toml` deja `jobs = 2`, `debug = 0` e `incremental = false` por eso. Compilar en
-`--release` tarda ~12 min; no es un error, es el objetivo por defecto. **No anadir dependencias
-grandes** (`reqwest`, `ort`, `whisper`, crates de criptografia): es justo lo que revienta la
-maquina. Ver "Descargas" mas abajo.
+Restricciones del equipo: 8 GB de RAM fisica (7,71 GB medidos) de los que solo queda del orden de
+1 GB libres en los picos de compilacion, target `x86_64-pc-windows-gnu`, MinGW GCC 16.2. La cifra
+que importa no es la instalada sino la libre: `jobs = 2`, `debug = 0` e `incremental = false` en
+`.cargo/config.toml` estan puestos porque lo que se agota es la memoria durante el enlazado, no la
+CPU. Compilar en `--release` tarda ~12 min; no es un error, es el objetivo por defecto. **No anadir
+dependencias grandes** (`reqwest`, `ort`, `whisper`, crates de criptografia): es justo lo que
+revienta la maquina. Ver "Descargas" mas abajo.
 
 # Arquitectura
 
@@ -47,7 +49,8 @@ No se separen: el worker de inferencia lee del mismo anillo de muestras que alim
 # Descargas de modelos
 
 Se usa `curl.exe` (el de `System32`) detras del trait `Fetcher`, no `reqwest`/`ureq`. Motivo:
-evita compilar TLS en un equipo con 1 GB de RAM. Cambiar de cliente HTTP significa implementar
+evita compilar TLS en un equipo con 8 GB de RAM de los que solo queda ~1 GB libre. Cambiar de
+cliente HTTP significa implementar
 `Fetcher`; el resto del crate no se toca.
 
 `ModelSpec` publica `expected_bytes` y `sha256` reales (verificados contra el fichero de

@@ -5,7 +5,8 @@
 # criterio que ya se aplica a los pesos del modelo, que tambien se descargan.
 #
 # Se usa el `curl.exe` del sistema, no `Invoke-WebRequest`, por el mismo motivo que en
-# `CurlFetcher`: no compilar TLS en un equipo con 1 GB de RAM.
+# `CurlFetcher`: no compilar TLS en un equipo de 8 GB de RAM de los que solo queda ~1 GB
+# libre durante la compilacion.
 #
 # Uso (desde la raiz del repo):
 #
@@ -97,7 +98,7 @@ Get-ChildItem -LiteralPath $outDir -Filter '*.dll' |
 # falta para la app.
 $wav = Join-Path $outDir 'jfk.wav'
 if (-not (Test-Path -LiteralPath $wav)) {
-  $wavUrl = "https://raw.githubusercontent.com/ggml-org/whisper.cpp/$RELEASE/samples/jfk.wav"
+  $wavUrl = "https://raw.githubusercontent.com/ggml-org/whisper.cpp/$tag/samples/jfk.wav"
   & curl.exe -sL --fail -o $wav $wavUrl
   if ($LASTEXITCODE -eq 0) {
     Write-Host "Muestra de voz para los tests: $wav"

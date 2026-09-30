@@ -423,8 +423,3 @@ impl ProgressEmitter {
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
   mutex.lock().unwrap_or_else(|err| err.into_inner())
 }
-
-/// Marcador de que el backend actual no hace inferencia real.
-///
-/// La UI lo lee para no presentar texto de ejemplo como si fuera una transcripcion.
-pub const ENGINE_IS_STUB: bool = true;
