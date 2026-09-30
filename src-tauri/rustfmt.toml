@@ -1,0 +1,4 @@
+# El andamiaje de Tauri y el frontend usan 2 espacios; se mantiene en Rust para que
+# el repositorio entero tenga un unico estilo.
+tab_spaces = 2
+edition = "2024"

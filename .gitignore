@@ -39,3 +39,22 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Artefactos de compilacion que se pueden colar fuera de target/.
+# `git add .` no debe poder meter un binario de 24 MB en el repo.
+/*.exe
+/src-tauri/*.exe
+*.pdb
+*.ilk
+*.lib
+*.a
+*.rlib
+
+# Runtime de whisper.cpp: ~12 MB de binarios de terceros que se despliegan con
+# scripts\deploy-whisper.ps1. Se ignoran aqui, no en src-tauri/.gitignore, para que
+# la regla sea visible desde la raiz junto a la de node_modules.
+/src-tauri/crates/lyricstream-whisper-sys/runtime/
+
+# El WAV de muestra y el modelo tambien viven ahi dentro, pero por si acaso.
+/src-tauri/crates/lyricstream-whisper-sys/**/*.dll
+/src-tauri/crates/lyricstream-whisper-sys/**/*.wav

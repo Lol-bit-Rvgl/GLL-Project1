@@ -1,0 +1,26 @@
+[package]
+name = "lyricstream-asr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+description = "Motor de STT local en streaming: VAD, segmentacion y orquestacion del decodificador"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+lyricstream-audio = { path = "../lyricstream-audio" }
+# El puente a whisper.cpp. Es una dependencia normal, no opcional: el motor real es
+# el unico backend de produccion. Aun asi, el crate se puede compilar y probar sin
+# las DLL desplegadas, porque solo se cargan al construir el motor (`WhisperEngine::load`).
+lyricstream-whisper-sys = { path = "../lyricstream-whisper-sys" }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+byteorder = "1"

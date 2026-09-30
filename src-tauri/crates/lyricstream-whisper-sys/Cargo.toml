@@ -1,0 +1,25 @@
+[package]
+name = "lyricstream-whisper-sys"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+description = "Puente C minimo a whisper.cpp: el layout de whisper_full_params lo pone el compilador C, no Rust"
+license = "MIT"
+publish = false
+
+[lib]
+# El shim se compila y se enlaza de forma estatica dentro del rlib. No hay cdylib:
+# ver el comentario del crate raiz sobre "export ordinal too large" en MinGW.
+crate-type = ["rlib"]
+
+[dependencies]
+log = "0.4"
+
+[build-dependencies]
+# `cc` solo para compilar NUESTRO shim de ~400 lineas. No compila whisper.cpp:
+# de ahi que el build siga siendo de segundos.
+cc = "1.2"
+
+[dev-dependencies]
+# Solo para los tests de integracion: leer un WAV de 16-bit del repo de whisper.
+byteorder = "1.5"

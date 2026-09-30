@@ -1,0 +1,21 @@
+[package]
+name = "lyricstream-audio"
+version = "0.1.0"
+description = "Captura y preprocesado de audio de LyricStream (WASAPI -> 16 kHz mono f32)"
+edition = "2024"
+rust-version = "1.90"
+license = ""
+
+[lib]
+name = "lyricstream_audio"
+# Solo `rlib`: este crate no se distribuye, se enlaza dentro de la app. Evita que
+# rustc genere un `.def` con ~117k simbolos exportados, que el linker de MinGW
+# rechaza con "export ordinal too large".
+crate-type = ["rlib"]
+
+[dependencies]
+cpal = "0.15"
+log = "0.4"
+ringbuf = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

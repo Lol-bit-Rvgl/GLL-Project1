@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // `src-tauri/target` es la carpeta de compilacion de Rust: dentro, el script de
+    // build de Tauri genera un `__global-api-script.js` que dispara un aviso de
+    // eslint y no es codigo nuestro.
+    "src-tauri/target/**",
   ]),
 ]);
 

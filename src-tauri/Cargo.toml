@@ -1,0 +1,60 @@
+[package]
+name = "lyricstream-stt"
+version = "0.1.0"
+description = "LyricStream STT"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace]
+members = [
+  "crates/lyricstream-audio",
+  "crates/lyricstream-asr",
+  "crates/lyricstream-whisper-sys",
+]
+# Sin esto, `cargo test` a secas solo probaria el paquete raiz y los tests de audio, de
+# ASR y del runtime (los unicos que hay) no se ejecutarian nunca.
+default-members = [
+  ".",
+  "crates/lyricstream-audio",
+  "crates/lyricstream-asr",
+  "crates/lyricstream-whisper-sys",
+]
+
+[lib]
+name = "lyricstream_stt_lib"
+# El harness de `cargo test` para este crate no puede ni arrancar: al no llevar el
+# manifest que incrusta `tauri-build` para el binario, `comctl32.dll` resuelve a la
+# version 5 del sistema, que no exporta `TaskDialogIndirect`, y el proceso muere con
+# STATUS_ENTRYPOINT_NOT_FOUND. Como aqui no hay ni un test (los de audio viven en
+# `lyricstream-audio`, que no depende de Tauri), se desactiva en vez de Fight it.
+test = false
+# La plantilla de Tauri pone aqui `["staticlib", "cdylib", "rlib"]`, pero el cdylib es
+# un artefacto para moviles y en Windows el enlazador (binutils 16.2, el de este
+# entorno) aborta con "export ordinal too large" al generar su tabla de exportaciones:
+# rustc pide exportar ~117 000 simbolos y el campo de ordinal de PE es de 16 bits.
+# Esta app es solo de escritorio, asi que se queda en rlib. Si algun dia hace falta
+# un objetivo movil, habra que volver a anadir `cdylib` y resolver el enlazado por
+# otra via.
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.0", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.12.0", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2.0"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0"
+# Captura y preprocesado: crate aparte para no arrastrar Tauri a los tests de DSP.
+lyricstream-audio = { path = "crates/lyricstream-audio" }
+# STT en streaming: VAD, segmentacion y worker, tambien sin Tauri para poder probarlos.
+lyricstream-asr = { path = "crates/lyricstream-asr" }

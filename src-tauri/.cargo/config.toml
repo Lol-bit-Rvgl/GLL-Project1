@@ -1,0 +1,11 @@
+# La maquina de desarrollo tiene 8 GB de RAM: compilar el grafo de Tauri con el
+# paralelismo por defecto agota la memoria y mata a rustc con
+# "memory allocation of N bytes failed".
+[build]
+jobs = 2
+
+# Sin simbolos de depuracion el consumo de memoria y el tamano de target/ bajan
+# drasticamente, y `cargo test` sigue siendo utilizable.
+[profile.dev]
+debug = 0
+incremental = false
