@@ -2,9 +2,9 @@
 
 # This is NOT the Next.js you know
 
-This version has breaking changes -- APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
 
-This block is written and re-added by `next dev` -- verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
 
@@ -143,12 +143,16 @@ linea; no hay libreria de iconos para dos triangulos.
   entonces el contrato de los eventos dejaria de coincidir con el que ven los tests de Rust.
 - `src/lib/transcript.ts`: el reducer. Puro y sin efectos, a proposito: se puede ejercitar entero sin
   montar React.
-- `src/lib/useTranscript.ts`: eventos de Tauri, persistencia en `localStorage` (cada 5 s) y estado
-  pegado al scroll. Sondeo de `get_stt_status` cada 2 s porque `stt-engine-status` **solo** se emite
-  al arrancar y al parar: sin el sondeo el piso de ruido y los contadores se quedan congelados en el
-  valor del arranque durante toda la sesion.
+- `src/lib/useTranscript.ts`: eventos de Tauri (a traves del puente), persistencia en `localStorage`
+  (cada 5 s) y estado pegado al scroll. Sondeo de `get_stt_status` cada 2 s porque `stt-engine-status`
+  **solo** se emite al arrancar y al parar: sin el sondeo el piso de ruido y los contadores se quedan
+  congelados en el valor del arranque durante toda la sesion.
 - `src/lib/useAudioLevel.ts`: vumetro aislado. Lee `get_audio_level` cada 100 ms a un `ref` y pinta
   cada 150 ms; va aparte del texto porque si no cada lectura re-renderizaria el historial entero.
+- `src/lib/bridge.ts`: el unico fichero que importa `@tauri-apps/api`. Decide si hay runtime nativo y,
+  si no, responde con stubs de lectura y con un bus de eventos en memoria. Ver "Modo web".
+- `src/lib/webPreview.ts`: el guion de ejemplo del modo web. Emite segmentos por el bus, no toca el
+  estado de React.
 - `src/lib/export.ts`: TXT, Markdown y SRT. TXT incluye el segmento en curso; MD y SRT no, porque
   un SRT con una frase a medias no significa nada.
 
@@ -347,6 +351,62 @@ de abajo, y el componente solo la pega.
   TypeScript y en Rust, y un test estructural compara las dos cadenas: un cambio en uno y no en el
   otro no da error de compilacion (la ventana encogeria y la UI se quedaria en grande).
 
+# Modo web: la vista previa en el navegador
+
+La misma pagina corre en el navegador y dentro de la webview de Tauri. No hay dos codigos: hay
+un `src/lib/bridge.ts` que decide, y la UI no se entera de nada.
+
+- **Un solo punto de entrada a Tauri.** `@tauri-apps/api` se importa **solo** en
+  `src/lib/bridge.ts`. `invoke` y `listen` llaman a `window.__TAURI_INTERNALS__.invoke`, que en
+  Chrome no existe: la llamada lanza dentro de una funcion `async`, o sea que vuelve como promesa
+  rechazada, y un `listen` rechazado deja el componente sin datos mientras un `invoke` rechazado
+  pinta su mensaje en la barra de errores. Cada sitio que importara `@tauri-apps/api` seria un
+  sitio donde decidir otra vez que hacer sin Tauri. Lo comprueba `pruebas/estructural.mjs`.
+- **La deteccion es `__TAURI_INTERNALS__`, no el user agent.** En macOS la webview de Tauri es un
+  WKWebView con el UA de Safari: `navigator.userAgent.includes("WebView")` declara navegador la
+  app de escritorio y deja de transcribir. Es un test con su mutacion.
+- **Solo se simulan las lecturas.** `get_stt_status`, `get_model_status`, `get_capture_status`,
+  `get_audio_level` y `get_mini_mode` responden con un estado honesto (motor parado, sin
+  inferencia, sin modelo, sin captura, nivel a cero). Las **escrituras no tienen stub**:
+  `start_capture`, `start_stt`, `download_model` y `toggle_mini_mode` rechazan, y sus botones
+  llevan `web` en el `disabled`. Un exito ahi pondria "TransCRIBiendo en vivo" sin que haya nada
+  transcribiendo, que es el fallo que la barra de control declara el peor posible y el mismo
+  motivo por el que `StubEngine` no se usa en produccion. Tamien hay test y mutacion.
+- **`web` sale de `useSyncExternalStore`, con el tercer argumento a `true`, y con la polaridad
+  invertida a proposito.** El `getSnapshot` es `SIN_TAURI = () => !hayTauri()`, no `hayTauri`: el
+  hook devuelve literalmente lo que le pasa, y en el navegador `hayTauri()` es `false`. Pasarle la
+  deteccion sin negar deja `web === false` en el navegador: la pagina carga sin una sola excepcion,
+  sin errores de consola y sin peticiones fallidas, y aun asi se queda en la maqueta nativa, con el
+  banner ausente y los botones de captura y descarga **activos**. Es la clase de fallo que no se ve
+  mirando la consola, y por eso hay test estructural con tres mutaciones.
+  El export estatico se genera en Node, donde `window` no existe y `hayTauri()` daria `false`; con
+  la maqueta nativa en el HTML prerenderizado, el navegador hidrataria contra un DOM distinto del
+  suyo. Devolviendo `true` en el servidor, la primera pintada del cliente coincide con el HTML y
+  React corrige en cuanto puede leer `window`. Se muestra antes la vista previa y no al reves: lo
+  que se ve un instante es "sin transcribir", y lo peligroso es un "Iniciar" que no hace nada.
+- **La vista previa ofrece una transcripcion de ejemplo, y la emite por el bus.**
+  `src/lib/webPreview.ts` lanza `emitir(EVENTS.transcription, ...)` con los mismos incrementos que
+  emite `WhisperEngine::increment`, de modo que se ejercitan el reducer (la regla del final como
+  cola, la del `start_ms` del primer parcial y la del final vacio), el buscador, los marcadores y
+  los tres exportadores por el camino de produccion. Insertar bloques en el estado seria mas corto
+  y no probaria nada de eso. El guion lleva diacriticos porque el buscador normaliza con NFD y eso
+  no se ve con un texto en ASCII plano. **No se lanza solo al entrar**: una pantalla que se llena de
+  texto sola parece una transcripcion real.
+- **Lo que NO depende de Tauri ya funcionaba.** El reproductor usa un `HTMLAudioElement`, no Web
+  Audio API: arrastrar ficheros, reproducir, la cola y el scrubber son todos DOM y `File`, asi que
+  no hay nada que adaptar. Los exportadores usan `URL.createObjectURL` y un `<a download>`, que
+  en el navegador descargan en vez de abrir el "guardar como" del webview. La unica cosa apagada en
+  la vista previa es el vumetro, y es correcto: no hay captura.
+
+Como probarlo sin Tauri:
+
+```powershell
+npm run dev                    # http://localhost:3000
+```
+
+Con `npm run build` sale `out/`, que tambien se puede servir tal cual con cualquier servidor
+estatico; ahi es donde hay que mirar que no sale nada de la barra de errores.
+
 # Pendiente conocido
 
 `EngineStatus.real_inference` sale de `EngineInfo::ready`, no de un literal. Cuando el runtime no
@@ -364,8 +424,8 @@ comparacion de hashes.
 ```powershell
 npm run lint                     # incluye las reglas de React Compiler, en modo error
 npm run build
-npm run test:estructural         # 17 tests sobre el fuente de los componentes y de Rust
-npm run test:mutacion            # comprueba que esos 17 tests FALLAN sobre el codigo roto
+npm run test:estructural         # 23 tests sobre el fuente de los componentes y de Rust
+npm run test:mutacion            # comprueba que esos 23 tests FALLAN sobre el codigo roto
 cargo fmt --all --check --manifest-path src-tauri\Cargo.toml   # 2 espacios, ancho 100
 cargo check --all-targets --manifest-path src-tauri\Cargo.toml
 cargo test --manifest-path src-tauri\Cargo.toml                 # 118 tests
@@ -416,12 +476,30 @@ Comprueba cosas que no se ven ejecutando `vu.ts`:
   `TEXTAREA`).
 - Que el modo mini lo decida el backend: la pagina llama a `toggle_mini_mode` y `get_mini_mode` y no
   redimensiona la ventana por su cuenta (`setSize`/`LogicalSize`).
+- Que `@tauri-apps/api` se importe en UN solo fichero. Sin ese test, el siguiente comando nuevo se
+  importa de donde toque y el navegador vuelve a llenarse de promesas rechazadas.
+- Que la deteccion del entorno sea `__TAURI_INTERNALS__` y no el user agent, que en macOS declara
+  navegador la app de escritorio.
+- Que la tabla de stubs NO contenga las escrituras (`start_capture`, `start_stt`,
+  `download_model`, `toggle_mini_mode`, y tampoco los `stop_*`): un exito ahi pone la UI en un
+  estado que no existe.
+- Que `web` este en el `disabled` de los cuatro controles nativos, y que el ejemplo se emita por
+  `emitir(EVENTS.transcription, ...)` y no se meta en el estado.
+- Que `web` salga del `getSnapshot` y que ese helper **niegue** la deteccion, y que el
+  `getServerSnapshot` devuelva `true`. Ocurrio: la pagina cargaba sin una sola excepcion, sin
+  errores de consola y sin peticiones fallidas, y se quedaba en la maqueta nativa con los botones
+  activos. Un test de valores no lo ve, porque `web` es un booleano bien formado en los dos casos:
+  el test comprueba de quien sale.
+- Que la cola del reproductor acepte un `File` de verdad. La verificacion de CDP suelta un WAV
+  sintetico en la ventana y comprueba que se reproduce solo, que la posicion avanza, que el boton
+  pasa a "Reproducir" al pausar y que el scrubber con `End` salta al final. El `<audio>` lo crea
+  el motor y **no** esta en el DOM, asi que lo que se observa es el `aria-valuetext` del scrubber.
 
 **`pruebas/mutacion.mjs` es la parte que no se puede saltar.** Pasa el codigo bueno, y un test que
 solo pasa no demuestra nada. El script copia `src/` (y `src-tauri/src/stt.rs`, que un test cruza con
-TypeScript) a un temporal, aplica cada una de las veintiuna regresiones que ya ocurrieron **en la
+TypeScript) a un temporal, aplica cada una de las veintinueve regresiones que ya ocurrieron **en la
 forma en que ocurrieron**, ejecuta `estructural.mjs` contra la copia rota y exige que FALLE. Las
-veintiuna tienen que morir. Si alguna sobrevive, ese test no vigilaba lo que dice vigilar. La primera vez que se ejecuto aviso de que una mutacion no aplicaba: la firma
+veintinueve tienen que morir. Si alguna sobrevive, ese test no vigilaba lo que dice vigilar. La primera vez que se ejecuto aviso de que una mutacion no aplicaba: la firma
 de `vuBarScale` era `floor: number = FLOOR` y la mutacion se habia escrito con otra forma. Es
 justo el fallo que este banco existe para encontrar, y por eso esta en el repo y no en el temporal.
 

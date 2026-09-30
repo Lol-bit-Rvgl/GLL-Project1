@@ -643,6 +643,194 @@ function testElModoMiniLoDecideElBackend() {
 }
 
 // --------------------------------------------------------------------------
+// 18. `@tauri-apps/api` se importa en un solo fichero.
+//
+// En el navegador `window.__TAURI_INTERNALS__` no existe, y `invoke` y `listen` lanzan
+// dentro de una promesa: un `listen` rechazado deja el componente sin datos y un
+// `invoke` rechazado pone su mensaje en la barra de errores. Cada sitio que importe
+// `@tauri-apps/api` es un sitio donde hay que decidir otra vez que hacer sin Tauri, y el
+// que se olvide es el que rompe. Solo `src/lib/bridge.ts` decide, una vez.
+// --------------------------------------------------------------------------
+function testElPuenteEsElUnicoQueImportaTauri() {
+  const proyecto = path.join(RAIZ, "src");
+  const intrusos = [];
+  const recorrer = (dir) => {
+    for (const entrada of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entrada.name);
+      if (entrada.isDirectory()) {
+        recorrer(abs);
+        continue;
+      }
+      if (!/\.tsx?$/u.test(entrada.name)) continue;
+      const rel = path.relative(RAIZ, abs).split(path.sep).join("/");
+      if (rel === "src/lib/bridge.ts") continue;
+      if (/@tauri-apps\//u.test(sinComentarios(fs.readFileSync(abs, "utf8")))) {
+        intrusos.push(rel);
+      }
+    }
+  };
+  recorrer(proyecto);
+  assert.equal(
+    intrusos.length,
+    0,
+    "estos ficheros importan `@tauri-apps/api` directamente:\n  " + intrusos.join("\n  ") +
+      "\nEn el navegador eso es una promesa rechazada. Todo lo que hable con Tauri pasa por " +
+      "src/lib/bridge.ts, que ya decide que hacer sin runtime nativo.",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 19. El modo se decide por `__TAURI_INTERNALS__`, no por el user agent.
+//
+// La alternativa "barata" es `navigator.userAgent.includes("WebView")`, y es la que
+// rompe: en macOS la webview de Tauri es un WKWebView con el UA de Safari, sin la cadena
+// "WebView". Con esa deteccion la app de escritorio se creeria un navegador y dejaria de
+// transcribir. El objeto que inyecta el shell no tiene esa ambiguedad.
+// --------------------------------------------------------------------------
+function testElPuenteNoAdivinaConElUserAgent() {
+  const rel = "src/lib/bridge.ts";
+  const limpio = sinComentarios(fuente(rel));
+
+  assert.ok(
+    /__TAURI_INTERNALS__/u.test(limpio),
+    rel + " ya no comprueba `__TAURI_INTERNALS__`: sin el no hay forma fiable de saber si " +
+      "hay runtime nativo, porque el user agent de la webview de macOS es el de Safari.",
+  );
+  assert.ok(
+    !/userAgent|navigator\b/u.test(limpio),
+    rel + " deduce el entorno del user agent o de `navigator`. La webview de Tauri en " +
+      "macOS se presenta como Safari, asi que esa heuristica declara navegador la app de " +
+      "escritorio y deja de transcribir.",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 20. El modo web no finge las escrituras del backend.
+//
+// `start_capture`, `start_stt`, `download_model` y `toggle_mini_mode` NO tienen stub. Si
+// devolvieran un exito, la cabecera pondria "Transcribiendo en vivo" sin que haya nada
+// transcribiendo, el boton maestro mentiria y el modelo apareceria instalado sin estar.
+// Los botones estan desactivados (`web` en `ControlBar`); el rechazo es la red por si
+// alguno se pulsara por otra via.
+// --------------------------------------------------------------------------
+function testElModoWebNoFingeLasEscrituras() {
+  const rel = "src/lib/bridge.ts";
+  const texto = fuente(rel);
+  const tabla = texto.match(/const\s+STUBS[^=]*=\s*\{([\s\S]*?)\n\};/u);
+  assert.ok(tabla, "no se encuentra la tabla `STUBS` en " + rel + "; este test la necesita");
+
+  const prohibidos = [
+    "start_capture",
+    "start_stt",
+    "stop_capture",
+    "stop_stt",
+    "download_model",
+    "toggle_mini_mode",
+  ];
+  const faux = prohibidos.filter((cmd) => tabla[1].includes(cmd + ":"));
+  assert.equal(
+    faux.length,
+    0,
+    "la tabla `STUBS` de " + rel + " finge estos comandos: " + faux.join(", ") + ". En el " +
+      "navegador no hay captura, ni motor, ni descarga, ni ventana que encoger: un exito " +
+      "aqui pone la UI en un estado que no existe.",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 21. Los controles nativos se desactivan en el navegador.
+//
+// La mitad del modo web es que el boton maestro no se pueda pulsar. Un boton que llama a
+// un comando inexistente acaba con el error de Rust en la barra de errores, que es
+// exactamente la pantalla que se queria evitar. `web` tiene que estar en el `disabled` del
+// boton maestro, del selector de fuente, de la descarga del modelo y del modo mini.
+// --------------------------------------------------------------------------
+function testLosControlesNativosSeDesactivan() {
+  const rel = "src/components/ControlBar.tsx";
+  const limpio = sinComentarios(fuente(rel));
+  const esperados = [
+    [/disabled=\{busy\s*\|\|\s*web\}/u, "el boton maestro"],
+    [/disabled=\{busy\s*\|\|\s*live\s*\|\|\s*web\}/u, "el selector de fuente"],
+    [/disabled=\{busy\s*\|\|\s*downloading\s*\|\|\s*web\}/u, "la descarga del modelo"],
+    [/<IconButton\b[\s\S]{0,320}?disabled=\{web\}[\s\S]{0,320}?onClick=\{onToggleMini\}/u, "el modo mini"],
+  ];
+  for (const [patron, quien] of esperados) {
+    assert.ok(
+      patron.test(limpio),
+      rel + ": " + quien + " no se desactiva en el navegador (falta `web` en su " +
+        "`disabled`). En la vista previa ese boton no puede hacer nada y su error se " +
+        "pinta en la barra de la pagina.",
+    );
+  }
+}
+
+// --------------------------------------------------------------------------
+// 22. El ejemplo se emite por el bus, no se mete en el estado.
+//
+// La transcripcion de ejemplo del modo web tiene que pasar por `emitir(EVENTS...)` y por
+// el reducer, porque lo que se quiere ejercitar es el reducer: la regla de que el final es
+// una cola y no la frase, la del `start_ms` del primer parcial y la del final vacio. Meter
+// bloques en el estado esquivaria las tres y el test pasaria mientras el codigo este roto.
+// --------------------------------------------------------------------------
+function testElEjemploSeEmitePorElBus() {
+  const rel = "src/lib/webPreview.ts";
+  const limpio = sinComentarios(fuente(rel));
+
+  assert.ok(
+    /emitir\(\s*EVENTS\.transcription/u.test(limpio),
+    rel + " ya no emite el ejemplo por el bus (`emitir(EVENTS.transcription, ...)`). Si el " +
+      "ejemplo se mete en el estado, deja de probarse el reducer, que es lo unico que hay " +
+      "que probar en la vista previa.",
+  );
+  assert.ok(
+    !/\buse(State|Reducer|Effect)\b/u.test(limpio) && !/\bsetState\b/u.test(limpio),
+    rel + " toca el estado de React. El guion emite eventos y ya esta: quien reduce es el " +
+      "hook, por el mismo camino que en la app de escritorio.",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 23. `web` sale del snapshot de `useSyncExternalStore`, y con la polaridad correcta.
+//
+// Esto ya ocurrio: la pagina montaba bien, no habia ni una excepcion ni un error de
+// consola, y sin embargo el navegador se quedaba en la maqueta nativa con los botones
+// activos y sin banner. La causa fue pasarle `hayTauri` como `getSnapshot`: el hook
+// devuelve ESO, y en el navegador `hayTauri()` es `false`, o sea `web === false` justo
+// donde tiene que ser `true`. Todos los controles quedaban habilitados y una escritura
+// nativa habria pintado un error en la barra de la pagina.
+//
+// Un test de valores no lo ve: `web` es un booleano bien formado en los dos casos. Lo que
+// se comprueba es de QUIEN sale, y que ese helper negate la deteccion.
+//
+// --------------------------------------------------------------------------
+function testElFlagWebSaleDelSnapshotConLaPolaridadCorrecta() {
+  const rel = "src/app/page.tsx";
+  const limpio = sinComentarios(fuente(rel));
+
+  assert.ok(
+    /const\s+SIN_TAURI\s*=\s*\(\s*\)\s*=>\s*!\s*hayTauri\(\s*\)/u.test(limpio),
+    rel + " ya no declara el helper que invierte la deteccion. `web` tiene que ser `!hayTauri()`: " +
+      "el booleano que sale del snapshot es el que decide si la pagina es la vista previa.",
+  );
+  assert.ok(
+    /useSyncExternalStore\(\s*SIN_CAMBIO\s*,\s*SIN_TAURI\s*,\s*SIEMPRE_VISTA_PREVIA\s*\)/u.test(limpio),
+    rel + ": `useSyncExternalStore` ya no recibe `SIN_TAURI` como `getSnapshot`. Si recibe `hayTauri`, " +
+      "`web` vale lo contrario de lo que debe: en el navegador la pagina se pinta como la app de " +
+      "escritorio, con el banner ausente y los botones nativos activos.",
+  );
+  assert.ok(
+    /const\s+SIEMPRE_VISTA_PREVIA\s*=\s*\(\s*\)\s*=>\s*true/u.test(limpio),
+    rel + " ha perdido el `getServerSnapshot` que devuelve `true`. El export estatico se genera en " +
+      "Node, donde no hay `window`; sin esto el HTML prerenderizado y la hidratacion no coinciden.",
+  );
+  assert.ok(
+    !/useSyncExternalStore\([^)]*\bhayTauri\b/u.test(limpio),
+    rel + ": `hayTauri` se esta pasando directo al hook. Eso devuelve `false` en el navegador " +
+      "y `web` queda invertido, que es exactamente el fallo que se vio.",
+  );
+}
+
+// --------------------------------------------------------------------------
 // Arranque
 // --------------------------------------------------------------------------
 const tests = [
@@ -663,6 +851,12 @@ const tests = [
   ["el evento del modo mini coincide entre TypeScript y Rust", testElEventoDelModoMiniCoincide],
   ["el atajo cede el paso en los campos de texto", testElAtajoCedeEnLosCamposDeTexto],
   ["el modo mini lo decide el backend", testElModoMiniLoDecideElBackend],
+  ["el puente es el unico que importa @tauri-apps/api", testElPuenteEsElUnicoQueImportaTauri],
+  ["el modo se decide por __TAURI_INTERNALS__, no por el user agent", testElPuenteNoAdivinaConElUserAgent],
+  ["el modo web no finge las escrituras del backend", testElModoWebNoFingeLasEscrituras],
+  ["los controles nativos se desactivan en el navegador", testLosControlesNativosSeDesactivan],
+  ["el ejemplo se emite por el bus, no se mete en el estado", testElEjemploSeEmitePorElBus],
+  ["`web` sale del snapshot con la polaridad correcta", testElFlagWebSaleDelSnapshotConLaPolaridadCorrecta],
 ];
 
 let fallos = 0;

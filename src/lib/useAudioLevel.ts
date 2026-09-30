@@ -19,7 +19,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge";
 
 /** Con que frecuencia se pregunta al backend. */
 const READ_MS = 100;

@@ -50,6 +50,8 @@ export type ControlBarProps = {
   searchOpen: boolean;
   /** `true` si la ventana esta en modo compacto. */
   mini: boolean;
+  /** `true` si la pagina corre en un navegador sin Tauri. Ver `src/lib/bridge.ts`. */
+  web: boolean;
   onToggle: () => void;
   onSourceChange: (source: AudioSource) => void;
   onDownloadModel: () => void;
@@ -88,6 +90,7 @@ export function ControlBar({
   canBookmark,
   searchOpen,
   mini,
+  web,
   onToggle,
   onSourceChange,
   onDownloadModel,
@@ -137,8 +140,13 @@ export function ControlBar({
         <button
           type="button"
           onClick={onToggle}
-          disabled={busy}
+          disabled={busy || web}
           aria-label={live ? "Pausar la transcripcion" : "Iniciar la transcripcion"}
+          title={
+            web
+              ? "La captura de audio y el modelo solo existen en la app de escritorio"
+              : undefined
+          }
           className={`group relative flex items-center gap-2.5 rounded-md px-4 py-2 text-sm font-medium
                       transition-all duration-200 active:scale-[0.98]
                       disabled:cursor-not-allowed disabled:opacity-50 ${
@@ -161,13 +169,18 @@ export function ControlBar({
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <SourceSwitch value={source} disabled={busy || live} onChange={onSourceChange} />
+        <SourceSwitch value={source} disabled={busy || live || web} onChange={onSourceChange} />
 
         {!modelReady && (
           <button
             type="button"
             onClick={onDownloadModel}
-            disabled={busy || downloading}
+            disabled={busy || downloading || web}
+            title={
+              web
+                ? "En el navegador no hay modelo que descargar: el STT vive en el runtime nativo"
+                : undefined
+            }
             className="rounded-md border border-neon/40 bg-neon/10 px-3 py-1.5
                        text-xs text-gold transition-colors hover:bg-neon/20
                        disabled:cursor-not-allowed disabled:opacity-50"
@@ -256,8 +269,13 @@ export function ControlBar({
 
           <IconButton
             label="Modo mini-ventana"
-            hint="Ventana compacta siempre encima, para tomar notas en otra app"
+            hint={
+              web
+                ? "El modo compacto necesita la ventana nativa de la app de escritorio"
+                : "Ventana compacta siempre encima, para tomar notas en otra app"
+            }
             active={mini}
+            disabled={web}
             onClick={onToggleMini}
           >
             <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-none stroke-current stroke-[1.5]" aria-hidden="true">

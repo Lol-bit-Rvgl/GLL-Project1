@@ -196,6 +196,88 @@ const MUTACIONES = [
         "setMini((v) => !v);",
       ),
   },
+  {
+    // La forma en que aparece: alguien anade una llamada nueva y la importa de donde
+    // toca, sin pasar por el puente. Compila, funciona en la app de escritorio y en el
+    // navegador deja la promesa rechazada.
+    nombre: "un import directo de `@tauri-apps/api` fuera del puente",
+    fichero: "src/lib/useAudioLevel.ts",
+    rompe: (t) => t.replace('import { invoke } from "./bridge";', 'import { invoke } from "@tauri-apps/api/core";'),
+  },
+  {
+    // La deteccion "barata" que se cuela al notar que `__TAURI_INTERNALS__` no existe en
+    // el navegador. En macOS el UA de la webview de Tauri es el de Safari y la app de
+    // escritorio se declararia navegador: deja de transcribir sin ningun error visible.
+    nombre: "el entorno deducido del user agent en vez de `__TAURI_INTERNALS__`",
+    fichero: "src/lib/bridge.ts",
+    rompe: (t) =>
+      t.replace(
+        'return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;',
+        'return typeof navigator !== "undefined" && /WebView|Tauri/i.test(navigator.userAgent);',
+      ),
+  },
+  {
+    // El atajo para que la vista previa no de errores: que `start_stt` devuelva un exito.
+    // Con eso la cabecera pone "Transcribiendo en vivo" y la UI afirma un estado que no
+    // existe. Es el fallo que el propio AGENTS.md prohibe con el `StubEngine`.
+    nombre: "`start_stt` con un stub que devuelve un exito en el navegador",
+    fichero: "src/lib/bridge.ts",
+    rompe: (t) =>
+      t.replace(
+        "  set_stt_language: () => null,",
+        "  set_stt_language: () => null,\n  start_stt: () => null,\n  start_capture: () => null,",
+      ),
+  },
+  {
+    // El boton maestro sin mirar el modo: en el navegador llama a un comando inexistente y
+    // su error aparece en la barra de errores de la pagina, que es justo la pantalla fea
+    // que el modo web queria evitar.
+    nombre: "el boton maestro sin `web` en su `disabled`",
+    fichero: "src/components/ControlBar.tsx",
+    rompe: (t) => t.replace("disabled={busy || web}", "disabled={busy}"),
+  },
+  {
+    // El ejemplo metido a mano en el estado en vez de emitir por el bus: la vista previa
+    // "funciona" y no se esta probando el reducer, que es lo que habia que probar.
+    nombre: "el ejemplo metido en el estado en vez de emitir por el bus",
+    fichero: "src/lib/webPreview.ts",
+    rompe: (t) =>
+      t.replace(
+        "          emitir(EVENTS.transcription, segmento);",
+        "          setTranscript((prev) => prev);",
+      ),
+  },
+  {
+    // `getSnapshot` recibindo `hayTauri` en vez del helper que lo invierte. Ocurrio, y la
+    // pagina parecia cargar bien: sin excepciones, sin errores de consola, sin peticiones
+    // fallidas. Lo unico que se veia mal es que el navegador se quedaba en la maqueta
+    // nativa, con el banner ausente y los botones de captura y descarga activos. Ese
+    // boton habria invocado un comando inexistente y pintado su error en la pagina, que
+    // es justo la pantalla que el modo web existe para no mostrar.
+    nombre: "`web` calculado con `hayTauri` en vez de con el helper invertido",
+    fichero: "src/app/page.tsx",
+    rompe: (t) =>
+      t.replace(
+        "useSyncExternalStore(SIN_CAMBIO, SIN_TAURI, SIEMPRE_VISTA_PREVIA)",
+        "useSyncExternalStore(SIN_CAMBIO, hayTauri, SIEMPRE_VISTA_PREVIA)",
+      ),
+  },
+  {
+    // El helper existe pero sin negar: `web` pasaria a ser "hay Tauri", que es al reves.
+    // El mismo fallo por otro camino, y por eso el test comprueba el cuerpo del helper y no
+    // solo que se use.
+    nombre: "el helper `SIN_TAURI` que no niega la deteccion",
+    fichero: "src/app/page.tsx",
+    rompe: (t) => t.replace("const SIN_TAURI = () => !hayTauri();", "const SIN_TAURI = () => hayTauri();"),
+  },
+  {
+    // `getServerSnapshot` que devuelve lo que ve el navegador en vez de `true`: el HTML
+    // prerenderizado en Node saldria con la maqueta nativa y el cliente hidrataria
+    // contra un DOM distinto del suyo.
+    nombre: "`getServerSnapshot` sin devolver `true`",
+    fichero: "src/app/page.tsx",
+    rompe: (t) => t.replace("const SIEMPRE_VISTA_PREVIA = () => true;", "const SIEMPRE_VISTA_PREVIA = () => hayTauri();"),
+  },
 ];
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lyricstream-mutacion-"));

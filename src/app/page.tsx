@@ -19,9 +19,7 @@
  * captura.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { ControlBar } from "@/components/ControlBar";
 import { ExportMenu } from "@/components/ExportMenu";
@@ -29,10 +27,12 @@ import { MiniOverlay } from "@/components/MiniOverlay";
 import { DockedPlayer } from "@/components/player/DockedPlayer";
 import { TranscriptStream } from "@/components/TranscriptStream";
 import { VuMeter } from "@/components/VuMeter";
+import { hayTauri, invoke, listen } from "@/lib/bridge";
 import { bytes } from "@/lib/format";
 import { bookmarkedBlocks } from "@/lib/transcript";
 import { useShortcuts } from "@/lib/useShortcuts";
 import { useTranscript } from "@/lib/useTranscript";
+import { cancelarEjemplo, emitirEjemplo } from "@/lib/webPreview";
 import { useDuckWhileTranscribing } from "@/lib/player/useMusicPlayer";
 import { EVENTS } from "@/lib/types";
 import type {
@@ -54,8 +54,31 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   }
 }
 
+/**
+ * El valor de "no hay Tauri" no cambia nunca dentro de una sesion, asi que la
+ * "suscripcion" de `useSyncExternalStore` no se suscribe a nada: se lee una vez y se queda.
+ *
+ * `SIN_TAURI` es el inverso de `hayTauri`, y tiene que ser una FUNCION estable de modulo y
+ * no una flecha en el render: `getSnapshot` se compara por identidad entre renders, y una
+ * que se crea cada vez haria que React viera un valor nuevo en cada pasada.
+ *
+ * El detalle que no es obvio es el tercer argumento, el valor del SERVIDOR. El export
+ * estatico se genera en Node, donde `window` no existe y `hayTauri()` daria `false`, y si
+ * el HTML prerenderizado saliera con la maqueta nativa, el navegador hidrataria contra un
+ * DOM distinto del suyo. Devolviendo `true` en el servidor, la primera pintada del
+ * cliente coincide con el HTML y React corrige en cuanto puede leer `window`. Se elige
+ * mostrar antes la vista previa y no al reves: lo que se ve un instante es "sin
+ * transcribir", y lo peligroso es un "Iniciar" que no hace nada.
+ */
+const SIN_CAMBIO = () => () => {};
+const SIN_TAURI = () => !hayTauri();
+const SIEMPRE_VISTA_PREVIA = () => true;
+
 export default function Home() {
   const transcript = useTranscript();
+  // `true` en el navegador, `false` dentro de la app de escritorio. Es lo unico que
+  // cambia de la pagina entera segun donde corra, asi que basta un booleano.
+  const web = useSyncExternalStore(SIN_CAMBIO, SIN_TAURI, SIEMPRE_VISTA_PREVIA);
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -150,6 +173,9 @@ export default function Home() {
     return () => {
       alive = false;
       for (const item of subscriptions) void item.then((fn) => fn()).catch(() => {});
+      // El guion de ejemplo sigue vivo si se cambia de pestana con la app abierta: sus
+      // timers seguirian metiendo bloques en un componente que ya no esta.
+      cancelarEjemplo();
     };
   }, [refresh]);
 
@@ -231,6 +257,19 @@ export default function Home() {
     } catch (err) {
       setError((err as Error).message);
     }
+  }, []);
+
+  /*
+   * Transcripcion de ejemplo, solo en el navegador.
+   *
+   * Emite eventos por el bus, no mete bloques en el estado: asi se ejercitan el reducer,
+   * el buscador, los marcadores y los exportadores por el mismo camino que en la app de
+   * escritorio. No se lanza solo al entrar porque una pantalla que se llena de texto sola
+   * parece una transcripcion real, y lo que el usuario tiene que saber es que en el
+   * navegador no la hay.
+   */
+  const onEjemplo = useCallback(() => {
+    emitirEjemplo();
   }, []);
 
   /*
@@ -339,6 +378,7 @@ export default function Home() {
         canBookmark={transcript.blocks.length > 0}
         searchOpen={transcript.searchOpen}
         mini={mini}
+        web={web}
         onToggle={onToggle}
         onSourceChange={onSourceChange}
         onDownloadModel={onDownload}
@@ -357,7 +397,31 @@ export default function Home() {
         </p>
       )}
 
-      {engine && !engine.real_inference && (
+      {web && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-neon/20
+                     bg-neon/[0.07] px-6 py-2 text-xs text-ember"
+        >
+          <span>
+            <span className="font-semibold text-gold">Modo Web / Vista Previa.</span> En el
+            navegador no hay runtime de whisper ni captura del sistema, asi que la
+            transcripcion en vivo no arranca. El reproductor, el buscador, los marcadores y
+            los exportadores funcionan de verdad.
+          </span>
+          <button
+            type="button"
+            onClick={onEjemplo}
+            title="Emite una transcripcion de ejemplo por el bus de eventos, para probar el buscador, los marcadores y los exportadores"
+            className="rounded-md border border-neon/40 bg-neon/10 px-2.5 py-1 text-[11px]
+                       text-gold transition-colors hover:bg-neon/20"
+          >
+            Cargar transcripcion de ejemplo
+          </button>
+        </div>
+      )}
+
+      {!web && engine && !engine.real_inference && (
         <p
           role="status"
           className="border-b border-neon/20 bg-neon/[0.07] px-6 py-2 text-xs text-ember"
