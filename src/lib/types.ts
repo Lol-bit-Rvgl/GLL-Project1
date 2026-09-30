@@ -154,10 +154,22 @@ export type Language = "auto" | "es" | "en";
 /** Fase del ciclo de vida, para el indicador de la barra de control. */
 export type EnginePhase = "reposo" | "capturando" | "transcribiendo";
 
+/**
+ * Estado del modo mini-ventana. `rename_all = "camelCase"` en el derive de Rust.
+ *
+ * Un solo campo, asi que la convencion no se nota, pero se deja escrito porque el dia
+ * que se anada el segundo (`width`, `height`) la diferencia entre `snake_case` y
+ * `camelCase` si se ve.
+ */
+export type MiniModeStatus = {
+  active: boolean;
+};
+
 /** Nombres de los eventos que emite el backend. */
 export const EVENTS = {
   download: "model-download-progress",
   downloadResult: "model-download-result",
   transcription: "transcription-segment",
   engine: "stt-engine-status",
+  miniMode: "mini-mode-changed",
 } as const;

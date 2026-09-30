@@ -42,10 +42,24 @@ export type ControlBarProps = {
   speaking: boolean;
   /** `true` si la musica se baja mientras transcribe. */
   duckMusic: boolean;
+  /** Cuantos bloques hay marcados, para la insignia del boton. */
+  bookmarks: number;
+  /** `true` si hay al menos una frase que marcar. */
+  canBookmark: boolean;
+  /** `true` si el buscador esta abierto. */
+  searchOpen: boolean;
+  /** `true` si la ventana esta en modo compacto. */
+  mini: boolean;
   onToggle: () => void;
   onSourceChange: (source: AudioSource) => void;
   onDownloadModel: () => void;
   onDuckMusicChange: (duck: boolean) => void;
+  /** Marca o desmarca el bloque mas reciente. */
+  onToggleBookmark: () => void;
+  /** Abre el buscador, o lo cierra si ya estaba abierto. */
+  onToggleSearch: () => void;
+  /** Enciende o apaga el modo compacto. */
+  onToggleMini: () => void;
 };
 
 /**
@@ -70,10 +84,17 @@ export function ControlBar({
   downloading,
   speaking,
   duckMusic,
+  bookmarks,
+  canBookmark,
+  searchOpen,
+  mini,
   onToggle,
   onSourceChange,
   onDownloadModel,
   onDuckMusicChange,
+  onToggleBookmark,
+  onToggleSearch,
+  onToggleMini,
 }: ControlBarProps) {
   const live = phase !== "reposo";
 
@@ -183,8 +204,113 @@ export function ControlBar({
           />
           Silenciar musica
         </label>
+
+        {/*
+          Los tres controles de sesion, juntos y al final.
+
+          Van en el grupo de ajustes y no en el de captura porque no arrancan ni paran
+          nada: actuan sobre lo ya transcrito. Separarlos del boton maestro por un grupo
+          es lo que evita que un clic de mas en "buscar" acabe parando la reunion.
+
+          Cada uno lleva su `title` con el atajo: el boton enseña el atajo, y el atajo no
+          necesita explicar el boton. Sin el `title`, `Ctrl+B` no se descubre y el boton
+          no se usa.
+        */}
+        <div className="flex items-center gap-1 rounded-md border border-neon/15 bg-obsidian/40 p-0.5">
+          <IconButton
+            label={bookmarks > 0 ? `Marcadores (${bookmarks})` : "Marcar el punto clave (Ctrl+B)"}
+            hint="Marca la ultima frase como punto clave (Ctrl+B)"
+            active={bookmarks > 0}
+            disabled={!canBookmark}
+            onClick={onToggleBookmark}
+          >
+            <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
+              <path d="M4 1.5h8l-1.2 4 1.2 4H8.6V14.5H7.4V9.5H4l1.2-4z" />
+            </svg>
+            {bookmarks > 0 && (
+              <span
+                className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-flare px-0.5
+                           font-mono text-[9px] font-bold leading-[14px] text-obsidian tabular-nums"
+                aria-hidden="true"
+              >
+                {bookmarks > 99 ? "99+" : bookmarks}
+              </span>
+            )}
+          </IconButton>
+
+          <IconButton
+            label="Buscar en la transcripcion"
+            hint="Busca y resalta coincidencias (Ctrl+F)"
+            active={searchOpen}
+            onClick={onToggleSearch}
+          >
+            <svg
+              viewBox="0 0 16 16"
+              className="h-3.5 w-3.5 fill-none stroke-current stroke-[1.5]"
+              aria-hidden="true"
+            >
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="M10.5 10.5 14 14" strokeLinecap="round" />
+            </svg>
+          </IconButton>
+
+          <IconButton
+            label="Modo mini-ventana"
+            hint="Ventana compacta siempre encima, para tomar notas en otra app"
+            active={mini}
+            onClick={onToggleMini}
+          >
+            <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-none stroke-current stroke-[1.5]" aria-hidden="true">
+              <rect x="2" y="3" width="12" height="10" rx="1.5" />
+              <rect x="7.5" y="8.5" width="5" height="3.5" rx="0.75" className="fill-current stroke-none" />
+            </svg>
+          </IconButton>
+        </div>
       </div>
     </header>
+  );
+}
+
+/**
+ * Boton redondo de icono, con estado.
+ *
+ * `active` cambia el fondo y el color, `label` es el `aria-label` y `hint` el `title` con
+ * el atajo. Un boton de icono sin `aria-label` es un boton sin nombre para un lector de
+ * pantalla, y en una barra de tres botones eso deja al usuario sin saber cual es cual.
+ */
+function IconButton({
+  label,
+  hint,
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  hint: string;
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      aria-pressed={active}
+      title={hint}
+      className={`relative flex h-7 w-7 items-center justify-center rounded transition-colors
+                  disabled:cursor-not-allowed disabled:opacity-40
+                  focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-neon ${
+                    active
+                      ? "bg-flare/15 text-flare"
+                      : "text-slate-ink hover:bg-neon/10 hover:text-snow"
+                  }`}
+    >
+      {children}
+    </button>
   );
 }
 

@@ -111,10 +111,52 @@ export function renderMarkdown(blocks: readonly Block[], meta: ExportMeta): stri
     `- Idioma: ${meta.language === "auto" ? "automatico" : meta.language}`,
     "",
   ];
+
+  /*
+   * Los marcadores van ANTES de la transcripcion completa, y no intercalados.
+   *
+   * Es la unica disposicion que sirve para lo que el marcador significa: un indice de
+   * lo que se decidio. Si cada frase marcada llevara un icono en su sitio, habria que
+   * leer 3000 palabras para encontrar las cuatro importantes, y con una reunion larga el
+   * puntero se pierde de nuevo. Con la seccion delante, lo marcado se lee de un vistazo
+   * y el resto sigue abajo, completo.
+   *
+   * Cada entrada lleva su reloj, y el enlace (`#bloque-<id>`) va al ancla de la frase
+   * completa en la transcripcion de abajo. El `id` sale del reducer y es estable mientras
+   * dure la sesion, asi que el enlace funciona en el fichero ya exportado.
+   */
+  const marcados = blocks.filter((block) => block.bookmarked === true);
+  if (marcados.length > 0) {
+    lines.push(`## 📌 Puntos Clave / Marcadores (${marcados.length})`, "");
+    for (const block of marcados) {
+      const text = block.text.trim();
+      if (text === "") continue;
+      lines.push(
+        `- **[${clock(block.startMs)}](#bloque-${block.id})** ${text}`,
+        "",
+      );
+    }
+    lines.push("---", "");
+  }
   for (const block of blocks) {
     const text = block.text.trim();
     if (text === "") continue;
-    lines.push(`**[${clock(block.startMs)}]** ${text}`, "");
+    /*
+     * El ancla solo se emite en los marcados, no en todas las frases.
+     *
+     * Es el unico destino posible de los enlaces de "Puntos Clave", asi que las demas
+     * no necesitan ninguna. Emitirla en las 3000 frases de una reunion llenaria el
+     * Markdown de `<a>` que nadie usa, y el fichero se abre a mano tanto como en un
+     * visor.
+     */
+    if (block.bookmarked === true) {
+      lines.push(
+        `<a id="bloque-${block.id}"></a>**[${clock(block.startMs)}]** ${text} 📌`,
+        "",
+      );
+    } else {
+      lines.push(`**[${clock(block.startMs)}]** ${text}`, "");
+    }
   }
   return `${lines.join("\n").trimEnd()}\n`;
 }

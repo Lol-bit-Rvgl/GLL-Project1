@@ -26,6 +26,10 @@
 //! - [`model`]: rutas, estado, hash e instalacion de los pesos, sin E/S en el camino
 //!   de audio.
 //! - [`worker`]: el hilo que lo orquesta y el canal de eventos que consume la UI.
+//! - [`mini_window`]: la geometria del modo compacto. Vive aqui, y no en el crate de
+//!   Tauri, porque el crate raiz no puede arrancar tests: una regla de ventana sin test
+//!   acaba siendo una costumbre, y esta decide a que tamano se encoge la ventana y como
+//!   se vuelve sin comerse la disposicion del usuario.
 //!
 //! # Sustituir el VAD o el motor
 //!
@@ -36,6 +40,7 @@
 
 pub mod engine;
 pub mod fetch;
+pub mod mini_window;
 pub mod model;
 pub mod progress;
 pub mod segmenter;
@@ -47,6 +52,10 @@ pub use engine::{
   EngineError, EngineInfo, Language, SttEngine, StubEngine, TranscribeOptions, Transcription,
 };
 pub use fetch::CurlFetcher;
+pub use mini_window::{
+  a_fisico, a_logico, esquina_inferior_derecha, limitar_a_pantalla, plan_mini, Decision, Geometria,
+  MiniEstado, Pantalla, MARGEN_PANTALLA, MINI_ALTO, MINI_ANCHO,
+};
 pub use model::{
   default_models_dir, hex, sha256_file, Fetcher, ModelError, ModelInfo, ModelManager, ModelSpec,
 };
@@ -64,7 +73,7 @@ use lyricstream_audio::AudioEngine;
 /// Fuente de produccion: extrae muestras del motor de captura.
 ///
 /// El `AudioEngine` expone un `drain` no bloqueante (Sprint 2), asi que encaja
-/// directo con el `SampleSource` del worker sin a馻adir primitivas de sincronizacion.
+/// directo con el `SampleSource` del worker sin anadir primitivas de sincronizacion.
 pub struct AudioEngineSource {
   engine: Arc<AudioEngine>,
 }

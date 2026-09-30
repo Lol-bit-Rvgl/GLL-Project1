@@ -13,12 +13,13 @@ use lyricstream_asr::model::{ModelInfo, ModelManager};
 use lyricstream_asr::{AudioEngineSource, CurlFetcher, Language, SttEngine, StubEngine};
 use lyricstream_audio::{AudioDevicesInfo, AudioSource, CaptureStatus};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, State, WebviewWindow};
 
 use crate::stt::{
-  ACTIVE_MODEL, EVENT_DOWNLOAD_RESULT, EVENT_ENGINE_STATUS, EngineStatus, MODEL_URL,
-  ProgressEmitter, SttState,
+  ACTIVE_MODEL, EVENT_DOWNLOAD_RESULT, EVENT_ENGINE_STATUS, EVENT_MINI_MODE, EngineStatus,
+  MODEL_URL, MiniModeStatus, ProgressEmitter, SttState,
 };
+use lyricstream_asr::mini_window::{Geometria, Pantalla};
 use lyricstream_asr::progress::DownloadOutcome;
 
 /// Emite el estado del motor a la UI.
@@ -238,6 +239,135 @@ pub fn drain_capture(state: Stt<'_>, max_samples: Option<usize>) -> Result<usize
   let mut buffer = Vec::new();
   let read = state.audio().read_mono(&mut buffer);
   Ok(read.min(limit))
+}
+
+/// Estado de la mini-ventana, compartido entre el comando y el evento de resize.
+///
+/// Vive en `SttState` y no en un `static` porque ya hay un contenedor y `SttState` es
+/// `Send + Sync`: un `static mut` o un `thread_local` obligaria a sincronizar a mano
+/// justo en el unico comando que puede llegar desde dos sitios a la vez (el boton y el
+/// atajo).
+#[tauri::command]
+pub fn toggle_mini_mode(window: WebviewWindow, state: Stt<'_>) -> Result<MiniModeStatus, String> {
+  let escala = window.scale_factor().unwrap_or(1.0);
+  let actual = geometria_actual(&window)?;
+  let pantalla = pantalla_actual(&window);
+
+  // El `plan` se decide con la aritmetica pura de `lyricstream_asr::mini_window`, que si
+  // tiene tests. Aqui solo se traducen sus numeros a llamadas de ventana.
+  let (decision, activo) = {
+    let mut mini = state
+      .mini()
+      .lock()
+      .map_err(|err| format!("estado mini bloqueado: {err}"))?;
+    let decision = mini.alternar(actual, escala, pantalla);
+    let activo = mini.activo;
+    (decision, activo)
+  };
+
+  if let Some(geom) = decision.geometria() {
+    window
+      .set_size(LogicalSize::new(geom.w, geom.h))
+      .map_err(|err| format!("no se pudo redimensionar la ventana: {err}"))?;
+    window
+      .set_position(LogicalPosition::new(geom.x, geom.y))
+      .map_err(|err| format!("no se pudo mover la ventana: {err}"))?;
+  }
+
+  // En mini se quita el marco: a 450x250 los bordes del titulo se comen una franja
+  // entera, y ademas el titulo no aporta nada porque el contenido ya dice que esta en
+  // modo mini.
+  window
+    .set_decorations(!activo)
+    .map_err(|err| format!("no se pudo cambiar el marco: {err}"))?;
+  // `always_on_top` es el motivo de ser del modo: la app esta sobre otra, tomando
+  // notas. Sin el, la mini se iria al fondo con el primer cambio de ventana.
+  window
+    .set_always_on_top(activo)
+    .map_err(|err| format!("no se pudo fijar la ventana encima: {err}"))?;
+  // El minimo se baja en mini para que el usuario pueda encogerla mas, y se RESTAURA al
+  // salir. Poner `None` al salir tambien funciona, pero deja la ventana normal
+  // redimensionable hasta 1x1 para siempre, que no es lo que quiere nadie.
+  let (min_w, min_h) = if activo {
+    (150.0, 100.0)
+  } else {
+    (800.0, 600.0)
+  };
+  window
+    .set_min_size(Some(LogicalSize::new(min_w, min_h)))
+    .map_err(|err| format!("no se pudo cambiar el tamano minimo: {err}"))?;
+  // En mini se quita de la barra de tareas: dos entradas de la misma app es ruido. La
+  // ventana no se pierde, porque el propio overlay lleva el boton Salir, que es el
+  // camino de vuelta.
+  window
+    .set_skip_taskbar(activo)
+    .map_err(|err| format!("no se pudo tocar la barra de tareas: {err}"))?;
+
+  if let Err(err) = window.emit(EVENT_MINI_MODE, &MiniModeStatus { active: activo }) {
+    log::warn!("no se pudo emitir el estado del modo mini: {err}");
+  }
+
+  Ok(MiniModeStatus { active: activo })
+}
+
+/// Lee si la ventana esta en modo compacto.
+///
+/// El frontend lo necesita al montar: si se recarga la webview con la mini ya activa, sin
+/// esto la UI pintaria la ventana grande mientras el SO muestra 450x250.
+#[tauri::command]
+pub fn get_mini_mode(state: Stt<'_>) -> Result<MiniModeStatus, String> {
+  let activo = state
+    .mini()
+    .lock()
+    .map_err(|err| format!("estado mini bloqueado: {err}"))?
+    .activo;
+  Ok(MiniModeStatus { active: activo })
+}
+
+/// Geometria actual de la ventana, en pixeles fisicos.
+///
+/// Se lee antes de redimensionar: es el unico momento en que sigue valiendo la ventana
+/// que el usuario tenia. En modo mini devuelve el tamano de la propia mini, y por eso
+/// `MiniEstado::entrar` es idempotente: el segundo intento no vuelve a guardar nada.
+fn geometria_actual(window: &WebviewWindow) -> Result<Geometria, String> {
+  let pos = window
+    .outer_position()
+    .map_err(|err| format!("no se pudo leer la posicion de la ventana: {err}"))?;
+  let tam = window
+    .outer_size()
+    .map_err(|err| format!("no se pudo leer el tamano de la ventana: {err}"))?;
+  Ok(Geometria::new(pos.x, pos.y, tam.width, tam.height))
+}
+
+/// Pantalla que contiene la ventana, o la principal si no se puede saber.
+///
+/// Se usa la de la ventana y no la principal a proposito: con dos monitores, poner la
+/// mini pegada a la esquina de la pantalla equivocada la deja fuera de vista.
+fn pantalla_actual(window: &WebviewWindow) -> Pantalla {
+  let monitors = window.available_monitors().unwrap_or_default();
+  let actual = window.current_monitor().ok().flatten();
+  // `Monitor` no es `Copy`, asi que se mueve en vez de desreferenciarse. Sin monitor
+  // actual (la ventana esta minimizada) se cae al primero disponible.
+  let elegido = match (actual, monitors.into_iter().next()) {
+    (Some(m), _) => Some(m),
+    (None, Some(primero)) => Some(primero),
+    (None, None) => None,
+  };
+  match elegido {
+    // `position()` y `size()` no devuelven `Option`, pero un monitor virtual puede
+    // reportar 0x0. Se cae entonces a un tamano razonable: una mini pegada a la nada es
+    // peor que una mini en la pantalla que toque.
+    Some(m) => {
+      let p = m.position();
+      let s = m.size();
+      if s.width == 0 || s.height == 0 {
+        Pantalla::new(0, 0, 1920, 1080)
+      } else {
+        Pantalla::new(p.x, p.y, s.width, s.height)
+      }
+    }
+    None => Pantalla::new(0, 0, 1920, 1080),
+  }
 }
 
 /// Puente temporal entre el estado de Tauri y una fuente del crate de ASR.

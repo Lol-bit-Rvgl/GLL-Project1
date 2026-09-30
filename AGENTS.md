@@ -306,6 +306,47 @@ evita**: el loopback abre el endpoint de render con `AUDCLNT_STREAMFLAGS_LOOPBAC
 digital sobre la mezcla antes del altavoz. El aviso de `captureConflict` dice exactamente eso, y sale
 solo cuando hay captura activa y algo sonando.
 
+## Marcadores, buscador y modo mini
+
+Todas las piezas nuevas siguen la regla del repo: la logica comprobable va en `src/lib/` o en el crate
+de abajo, y el componente solo la pega.
+
+- **Marcadores.** `Block.bookmarked` es opcional, asi que `Persisted.version` sigue en `1` y una
+  sesion guardada antes de este cambio se restaura igual. `toggleBookmark` vive en el reducer
+  (`src/lib/transcript.ts`) y `bookmarkedBlocks` recibe la LISTA de bloques, no el estado entero.
+  `Ctrl+B` marca la ultima frase; su id se lee de `blocks` en el momento del atajo y no de una
+  referencia, para no marcar la penultima por un render viejo. El acento del bloque marcado usa los
+  tokens del tema (`border-flare`, `bg-flare/[0.07]`), no la rampa cruda `amber-400` que se pidio
+  literalmente: `AGENTS.md` ya explica que los tokens existen para que el ambar sea uno solo, y el
+  banco estructural lo comprueba. En el Markdown van a una seccion `## Puntos Clave / Marcadores`
+  ANTES de la transcripcion, con un ancla `<a id="bloque-N">` solo en las frases marcadas: emitirla
+  en las 3000 frases de una reunion llenaria el fichero de `<a>` que nadie usa, y los demas bloques
+  no son destino de ningun enlace.
+- **Buscador.** `src/lib/search.ts` compara SUBCADENAS y nunca construye un `RegExp`:
+  `new RegExp(texto, "gi")` es un ReDoS a pocos caracteres y corre en el mismo hilo que pinta la
+  transcripcion, asi que un texto de busqueda raro congela la ventana entera. Normaliza con `NFD` y
+  quita los diacriticos, de modo que `transcripcion` encuentra `transcripción`, y devuelve tramos
+  para que el resaltado corte por el texto ORIGINAL. El campo vive en `SearchBar.tsx` y no dentro de
+  `TranscriptStream`: el foco al abrir exige un `useEffect`, y ese fichero tiene **prohibido**
+  cualquier efecto (el contador de frases sin leer se deriva del ancla). Con **texto escrito** se
+  pinta el historial ENTERO y se salta la ventana de render: quien busca esta leyendo resultados, no
+  scrolleando. Con el buscador abierto pero vacio se conserva la ventana, porque el recorte es
+  invisible hasta que hay algo que buscar.
+- **Ventana de renderizado.** Por encima de `LIMITE_RENDER` (150) `planVentana` pinta solo lo visible
+  mas un margen y cubre el resto con DOS espaciadores de altura calculada, de modo que la altura
+  total **no cambia nunca**. Colapsar el historial viejo seria mas barato, pero mueve el scroll y el
+  usuario que lee la mitad veria saltar el texto bajo el cursor. El alto por bloque es una estimacion
+  (56 px), asi que la barra de scroll puede no caer exactamente sobre la ultima frase; el contenido
+  que se ve, si. El rango solo se publica como estado cuando cambia de verdad (`mismaVentana`).
+- **Modo mini.** La geometria es de Rust: `mini_window.rs` en `lyricstream-asr` (funciones puras, 17
+  tests) decide tamano, esquina y recorte contra la pantalla. Los comandos `toggle_mini_mode` y
+  `get_mini_mode` viven en `src-tauri/src/commands.rs`; `SttState` guarda el estado en
+  `src-tauri/src/stt.rs` y emite `mini-mode-changed` (`EVENT_MINI_MODE`). La UI **no** decide el modo
+  ni redimensiona la ventana: lee `get_mini_mode` al montar, escucha el evento y pinta
+  `MiniOverlay.tsx` o la maqueta normal, nunca las dos. El nombre del evento esta escrito en
+  TypeScript y en Rust, y un test estructural compara las dos cadenas: un cambio en uno y no en el
+  otro no da error de compilacion (la ventana encogeria y la UI se quedaria en grande).
+
 # Pendiente conocido
 
 `EngineStatus.real_inference` sale de `EngineInfo::ready`, no de un literal. Cuando el runtime no
@@ -323,11 +364,11 @@ comparacion de hashes.
 ```powershell
 npm run lint                     # incluye las reglas de React Compiler, en modo error
 npm run build
-npm run test:estructural         # 6 tests sobre el fuente de los componentes
-npm run test:mutacion            # comprueba que esos 6 tests FALLAN sobre el codigo roto
+npm run test:estructural         # 17 tests sobre el fuente de los componentes y de Rust
+npm run test:mutacion            # comprueba que esos 17 tests FALLAN sobre el codigo roto
 cargo fmt --all --check --manifest-path src-tauri\Cargo.toml   # 2 espacios, ancho 100
 cargo check --all-targets --manifest-path src-tauri\Cargo.toml
-cargo test --manifest-path src-tauri\Cargo.toml                 # 101 tests
+cargo test --manifest-path src-tauri\Cargo.toml                 # 118 tests
 ```
 
 ## Lo que el banco temporal **no** caza, y `pruebas/` si
@@ -349,8 +390,8 @@ dentro de un componente React que el banco no monta.
 
 `pruebas/estructural.mjs` cubre ese hueco y **si** se commitea, porque un test que se borra no
 previene una regresion. No es un runner: es `node` puro, sin dependencias, sin transformacion y sin
-jsdom, y lee el texto de `src/components/*.tsx` con `node:fs`. Comprueba cosas que no se ven
-ejecutando `vu.ts`:
+jsdom, y lee el texto de `src/` (componentes, `src/lib` y `src-tauri/src/stt.rs`) con `node:fs`.
+Comprueba cosas que no se ven ejecutando `vu.ts`:
 
 - Que `vuBarScale` no se pase **desnuda** a `.map()`. El bug era de aridad en el punto de llamada:
   `map` invoca con `(valor, indice, array)` y el segundo parametro de `vuBarScale` es `floor`, asi
@@ -364,12 +405,23 @@ ejecutando `vu.ts`:
   51 px medidos en vivo, los 47 huecos se comian 47 y cada barra salia a 0 px de dispositivo.
 - Que ni la pista ni las barras dejen de ser `flex-1`, que es lo que reparte el ancho.
 - Que el timestamp no vuelva a llevar un modificador de opacidad sobre `text-flare`.
+- Que el buscador no construya un `RegExp` (ReDoS en el hilo de pintado) y siga comparando
+  subcadenas con `indexOf`.
+- Que el acento del bloque marcado use los tokens del tema y no la rampa cruda `amber-*`.
+- Que la ventana pinte los DOS espaciadores de altura y que los dos vayan `aria-hidden`. Sin ellos
+  la altura total se colapsa y el scroll salta al cerrarse un bloque.
+- Que `EVENTS.miniMode` (TypeScript) y `EVENT_MINI_MODE` (Rust) sean la misma cadena. Un renombrado
+  en un solo lado no da error de compilacion: la ventana encoge y la UI se queda en grande.
+- Que el atajo de teclado ceda el paso en los campos de texto (`isContentEditable`, `INPUT`,
+  `TEXTAREA`).
+- Que el modo mini lo decida el backend: la pagina llama a `toggle_mini_mode` y `get_mini_mode` y no
+  redimensiona la ventana por su cuenta (`setSize`/`LogicalSize`).
 
 **`pruebas/mutacion.mjs` es la parte que no se puede saltar.** Pasa el codigo bueno, y un test que
-solo pasa no demuestra nada. El script copia `src/` a un temporal, aplica cada una de las ocho
-regresiones que ya ocurrieron **en la forma en que ocurrieron**, ejecuta `estructural.mjs` contra la
-copia rota y exige que FALLE. Las ocho tienen que morir. Si alguna sobrevive, ese test no vigilaba
-lo que dice vigilar. La primera vez que se ejecuto aviso de que una mutacion no aplicaba: la firma
+solo pasa no demuestra nada. El script copia `src/` (y `src-tauri/src/stt.rs`, que un test cruza con
+TypeScript) a un temporal, aplica cada una de las veintiuna regresiones que ya ocurrieron **en la
+forma en que ocurrieron**, ejecuta `estructural.mjs` contra la copia rota y exige que FALLE. Las
+veintiuna tienen que morir. Si alguna sobrevive, ese test no vigilaba lo que dice vigilar. La primera vez que se ejecuto aviso de que una mutacion no aplicaba: la firma
 de `vuBarScale` era `floor: number = FLOOR` y la mutacion se habia escrito con otra forma. Es
 justo el fallo que este banco existe para encontrar, y por eso esta en el repo y no en el temporal.
 

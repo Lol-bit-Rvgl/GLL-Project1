@@ -142,6 +142,60 @@ const MUTACIONES = [
         "@keyframes slide-up-fade {\n  from {\n    opacity: 0;\n    top: 12px;\n  }\n  to {\n    opacity: 1;\n    top: 0;\n  }\n}",
       ),
   },
+  {
+    // El antipatron "obvio" del buscador: `RegExp` con la `g` para no escribir el bucle.
+    // Es un ReDoS a pocos caracteres y corre en el hilo que pinta.
+    nombre: "el buscador con `new RegExp`, que es el ReDoS",
+    fichero: "src/lib/search.ts",
+    rompe: (t) =>
+      t.replace(
+        "  const tramos: Match[] = [];",
+        '  const re = new RegExp(objetivo, "gi");\n  const tramos: Match[] = [];',
+      ),
+  },
+  {
+    // La forma exacta en que el usuario lo pidio: la rampa cruda de Tailwind en vez del
+    // token del tema.
+    nombre: "el acento del marcador con la rampa cruda `amber-400`",
+    fichero: "src/components/TranscriptStream.tsx",
+    rompe: (t) =>
+      t.replace(
+        '"border-flare bg-flare/[0.07] hover:border-flare"',
+        '"border-amber-400 bg-amber-500/10 hover:border-amber-400"',
+      ),
+  },
+  {
+    // Colapsar lo que queda fuera de la ventana en vez de dejar hueco: el historial
+    // ventilado ocupa menos de lo que mide y el scroll salta al cerrarse un bloque.
+    nombre: "la ventana sin espaciadores: la altura total se colapsa",
+    fichero: "src/components/TranscriptStream.tsx",
+    rompe: (t) => t.replace(/\s*\{ventana\.(arribaPx|abajoPx) > 0 && \([\s\S]*?\)\}\n/gu, "\n"),
+  },
+  {
+    // Renombrar el evento solo en TS: el backend emite el viejo, la UI ya no escucha y el
+    // modo mini se activa sin que la maqueta cambie. No da error de compilacion.
+    nombre: "el evento del modo mini renombrado solo en TypeScript",
+    fichero: "src/lib/types.ts",
+    rompe: (t) => t.replace('miniMode: "mini-mode-changed"', 'miniMode: "mini-window-changed"'),
+  },
+  {
+    // Quitar el guardia: el atajo se queda con los eventos de cualquier campo de texto, y
+    // `Ctrl+B` marcaria la ultima frase mientras el usuario pone negrita.
+    nombre: "el atajo sin el guardia de campos de texto",
+    fichero: "src/lib/useShortcuts.ts",
+    rompe: (t) => t.replace("  if (destino.isContentEditable) return true;\n", ""),
+  },
+  {
+    // La UI decide el modo mini por su cuenta: la ventana de Tauri se queda a tamano
+    // completo y el aviso de transcripcion dentro, que es lo que el modo mini evita.
+    nombre: "el modo mini decidido en la UI, sin redimensionar la ventana",
+    fichero: "src/app/page.tsx",
+    rompe: (t) =>
+      t.replace(
+        /const estado = await call<MiniModeStatus>\("toggle_mini_mode"\);\n\s*setMini\(estado\.active\);/u,
+        "setMini((v) => !v);",
+      ),
+  },
 ];
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lyricstream-mutacion-"));
@@ -150,6 +204,17 @@ let supervivientes = 0;
 try {
   // Copia `src/` una vez: cada mutacion parte de la copia intacta.
   fs.cpSync(path.join(RAIZ, "src"), path.join(tmp, "src"), { recursive: true });
+
+  // Y `src-tauri/src/stt.rs`, porque el test estructural del evento del modo mini cruza
+  // TypeScript con Rust: lee `src/lib/types.ts` y este fichero. Sin copiarlo, ese test
+  // leeria de un arbol que no existe y fallaria en TODAS las mutaciones por culpa del
+  // arnes, no del codigo. Copia puntual del fichero y no del crate entero: no hace falta
+  // compilarlo, solo leer su texto.
+  fs.mkdirSync(path.join(tmp, "src-tauri", "src"), { recursive: true });
+  fs.cpSync(
+    path.join(RAIZ, "src-tauri", "src", "stt.rs"),
+    path.join(tmp, "src-tauri", "src", "stt.rs"),
+  );
 
   for (const m of MUTACIONES) {
     const destino = path.join(tmp, m.fichero);

@@ -26,6 +26,8 @@ pub fn run() {
       commands::get_stt_status,
       commands::set_stt_language,
       commands::drain_capture,
+      commands::toggle_mini_mode,
+      commands::get_mini_mode,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

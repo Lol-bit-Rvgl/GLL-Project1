@@ -19,16 +19,19 @@
  * captura.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import { ControlBar } from "@/components/ControlBar";
 import { ExportMenu } from "@/components/ExportMenu";
+import { MiniOverlay } from "@/components/MiniOverlay";
 import { DockedPlayer } from "@/components/player/DockedPlayer";
 import { TranscriptStream } from "@/components/TranscriptStream";
 import { VuMeter } from "@/components/VuMeter";
 import { bytes } from "@/lib/format";
+import { bookmarkedBlocks } from "@/lib/transcript";
+import { useShortcuts } from "@/lib/useShortcuts";
 import { useTranscript } from "@/lib/useTranscript";
 import { useDuckWhileTranscribing } from "@/lib/player/useMusicPlayer";
 import { EVENTS } from "@/lib/types";
@@ -38,6 +41,7 @@ import type {
   DownloadProgress,
   EnginePhase,
   Language,
+  MiniModeStatus,
   ModelStatus,
 } from "@/lib/types";
 
@@ -64,6 +68,10 @@ export default function Home() {
   // promete no hacer. El fallo en sentido contrario -que la musica este un momento
   // mas baja- se ve en el control de volumen, que se pinta en ambar mientras dura.
   const [duckMusic, setDuckMusic] = useState(true);
+  // Modo mini-ventana. El estado autoritativo es el del backend, porque el tamano y el
+  // `always_on_top` los fija el SO y la UI solo los refleja. Aqui se guarda una copia
+  // para pintar, y se sincroniza al montar y con el evento `mini-mode-changed`.
+  const [mini, setMini] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -90,6 +98,16 @@ export default function Home() {
     // toda la pagina nada mas montar, que en una app de texto se nota.
     void (async () => {
       if (alive) await refresh();
+      // El modo mini se lee del backend al montar. Si la webview se recarga con la mini
+      // activa, sin esto la UI pintaria la ventana grande mientras el SO muestra la
+      // pequena, y los botones de la cabecera quedarian fuera de la pantalla.
+      try {
+        const estado = await call<MiniModeStatus>("get_mini_mode");
+        if (alive) setMini(estado.active);
+      } catch {
+        // Sin Tauri (navegador de desarrollo) el comando no existe: se sigue en modo
+        // normal, que es el unico que tiene sentido sin ventana nativa.
+      }
     })();
 
     const subscriptions = [
@@ -119,6 +137,13 @@ export default function Home() {
         } else {
           setError(failure ?? "la descarga del modelo fallo");
         }
+      }),
+      // El backend emite el cambio ademas de responder al comando, para que un cambio
+      // que no venga de la UI (el usuario redimensiona a mano, o el SO restaura la
+      // ventana) tambien actualice lo que se pinta.
+      listen<MiniModeStatus>(EVENTS.miniMode, (event) => {
+        if (!alive) return;
+        setMini(event.payload.active);
       }),
     ];
 
@@ -190,6 +215,59 @@ export default function Home() {
       setLanguage(next);
     });
 
+  /*
+   * El modo mini NO pasa por `run`.
+   *
+   * `run` pone `busy` a true y bloquea los botones, que es lo correcto para una accion
+   * que puede tardar. Cambiar el tamano de la ventana es instantaneo, y bloquear la barra
+   * entera un instante hace parpadear el boton maestro cada vez que se entra o se sale
+   * del modo. El error se muestra igual, que es lo unico que hace falta.
+   */
+  const onToggleMini = useCallback(async () => {
+    try {
+      const estado = await call<MiniModeStatus>("toggle_mini_mode");
+      setMini(estado.active);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, []);
+
+  /*
+   * Marcar con el atajo, sin saber de bloques.
+   *
+   * `Ctrl+B` marca la ULTIMA frase. El id se lee de `blocks` en el momento del atajo, no
+   * se guarda una referencia: entre el render y la pulsacion puede haber llegado un
+   * bloque nuevo, y marcar el penultimo por un render viejo es justo el fallo que este
+   * cierre evita.
+   *
+   * Los callbacks se toman sueltos y no del objeto `transcript` entero: ese objeto se
+   * recrea en cada render, asi que usarlo como dependencia volveria a suscribir el
+   * listener de teclado en cada parcial. Los tres que se usan son estables.
+   */
+  const { toggleBookmark, openSearch, closeSearch, searchOpen, blocks } = transcript;
+
+  const onShortcutBookmark = useCallback(() => {
+    const ultimo = blocks.at(-1);
+    if (ultimo !== undefined) toggleBookmark(ultimo.id);
+  }, [blocks, toggleBookmark]);
+
+  const onShortcutSearch = useCallback(() => {
+    if (searchOpen) {
+      closeSearch();
+    } else {
+      openSearch();
+    }
+  }, [closeSearch, openSearch, searchOpen]);
+
+  useShortcuts({
+    onToggleBookmark: onShortcutBookmark,
+    onOpenSearch: openSearch,
+    onCloseSearch: closeSearch,
+    searchOpen,
+    canBookmark: blocks.length > 0,
+  });
+
   const model = status?.model;
   // El del hook manda: lo refresca el sondeo de 2 s y el evento de arranque y parada.
   // El de `status` solo se actualiza cuando termina una accion, asi que durante una
@@ -209,6 +287,39 @@ export default function Home() {
       ? "capturando"
       : "reposo";
 
+  const marcados = useMemo(() => bookmarkedBlocks(transcript.blocks), [transcript.blocks]);
+
+  /*
+   * En mini se pinta la ventana entera y se sale ANTES de montar el resto.
+   *
+   * No es un `hidden` sobre la maqueta normal: es un arbol distinto. Dejar montado el
+   * historial con la ventana a 450x250 obligaria a que el canal, el vumetro y el dock
+   * se pintasen para luego esconderlos, y ademas seguirian recibiendo el scroll y el
+   * foco. Con dos arboles, el modo mini no arrastra nada del modo grande y se puede
+   * medir por separado.
+   */
+  if (mini) {
+    return (
+      <MiniOverlay
+        // El texto vivo es el parcial en curso; si no hay frase abierta, la ULTIMA
+        // cerrada. No se le pasa `transcript.text`, que es la transcripcion ENTERA: a
+        // 450x250 eso pintaria el historial completo en un parrafo.
+        liveText={
+          transcript.interim.trim() !== ""
+            ? transcript.interim
+            : (transcript.blocks.at(-1)?.text ?? "")
+        }
+        speaking={transcript.speaking}
+        capturing={capturing}
+        engineReady={engine?.real_inference ?? false}
+        hasText={transcript.blocks.length > 0 || transcript.interim.trim() !== ""}
+        bookmarks={marcados.length}
+        onToggle={onToggle}
+        onExit={onToggleMini}
+      />
+    );
+  }
+
   return (
     // `relative` para que el halo de fondo quede detras del contenido, y el halo como
     // hermano en vez de fondo del `main`: el `main` es opaco y taparia su propio
@@ -224,10 +335,17 @@ export default function Home() {
         downloading={downloading}
         speaking={transcript.speaking}
         duckMusic={duckMusic}
+        bookmarks={marcados.length}
+        canBookmark={transcript.blocks.length > 0}
+        searchOpen={transcript.searchOpen}
+        mini={mini}
         onToggle={onToggle}
         onSourceChange={onSourceChange}
         onDownloadModel={onDownload}
         onDuckMusicChange={setDuckMusic}
+        onToggleBookmark={onShortcutBookmark}
+        onToggleSearch={onShortcutSearch}
+        onToggleMini={onToggleMini}
       />
 
       {error && (
@@ -263,6 +381,12 @@ export default function Home() {
         onStickChange={transcript.setStick}
         engineReady={engine?.real_inference ?? false}
         capturing={capturing}
+        query={transcript.query}
+        setQuery={transcript.setQuery}
+        searchOpen={transcript.searchOpen}
+        matchCount={transcript.matchCount}
+        onToggleBookmark={transcript.toggleBookmark}
+        onDismissSearch={transcript.closeSearch}
       />
 
       {/*

@@ -22,7 +22,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
-import { emptyTranscript, fullText, reduce, sessionEndMs } from "./transcript";
+import {
+  emptyTranscript,
+  fullText,
+  reduce,
+  sessionEndMs,
+  toggleBookmark as toggleBookmarkIn,
+} from "./transcript";
+import { countMatches } from "./search";
 import type { Block, Interim, TranscriptState } from "./transcript";
 import { EVENTS } from "@/lib/types";
 import type { EngineStatus, TranscriptionSegment } from "@/lib/types";
@@ -55,6 +62,20 @@ export type UseTranscript = {
   clear: () => void;
   /** Ultimo estado del motor recibido por el evento `stt-engine-status`. */
   engine: EngineStatus | null;
+  /** Marca o desmarca un bloque. */
+  toggleBookmark: (id: number) => void;
+  /** `true` si el buscador esta abierto. */
+  searchOpen: boolean;
+  /** Texto del buscador. Cadena vacia si esta cerrado. */
+  query: string;
+  /** Fija el texto del buscador. */
+  setQuery: (value: string) => void;
+  /** Abre el buscador. */
+  openSearch: () => void;
+  /** Cierra el buscador y borra el texto. */
+  closeSearch: () => void;
+  /** Coincidencias del historial entero, para la etiqueta del buscador. */
+  matchCount: number;
 };
 
 export function useTranscript(): UseTranscript {
@@ -192,15 +213,55 @@ export function useTranscript(): UseTranscript {
 
   const setStick = useCallback((stick: boolean) => setStickToBottom(stick), []);
 
+  /*
+   * Marcadores.
+   *
+   * Van dentro de `TranscriptState` y no en un `useState` aparte, por una razon concreta:
+   * el intervalo de persistencia serializa `stateRef.current`, o sea el estado del
+   * reducer. Un marcador guardado fuera no se guardaria, y un punto clave que desaparece
+   * al reiniciar la app es peor que no tenerlo.
+   *
+   * `toggleBookmarkIn` es pura y devuelve el MISMO estado si el id no existe, asi que
+   * marcar dos veces seguidas con un atajo repetido no genera un render de mas.
+   */
+  const toggleBookmark = useCallback((id: number) => {
+    setState((prev) => toggleBookmarkIn(prev, id));
+  }, []);
+
+  /*
+   * Buscador.
+   *
+   * Estado de UI, no de transcripcion: no se persiste, no va al reducer y no aparece en
+   * ningun export. Vive aqui y no en el componente porque el `TranscriptStream` solo lo
+   * pinta, y porque `matchCount` se calcula sobre el historial entero, que es del hook.
+   */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setQuery("");
+  }, []);
+
+  // Solo se cuenta si hay texto: `countMatches` con la cadena vacia ya devuelve 0, pero
+  // recorrer el historial entero para obtener un 0 que ya sabemos es un desperdicio en
+  // cada render mientras el buscador esta abierto y sin escribir.
+  const matchCount = useMemo(
+    () => (query.trim() === "" ? 0 : countMatches(state.blocks, query)),
+    [state.blocks, query],
+  );
+
   const clear = useCallback(() => {
     setState(emptyTranscript());
     setStickToBottom(true);
+    closeSearch();
     try {
       window.localStorage.removeItem(STORAGE_KEY);
     } catch {
       /* sin almacenamiento disponible */
     }
-  }, []);
+  }, [closeSearch]);
 
   const text = useMemo(() => fullText(state), [state]);
   const endMs = useMemo(() => sessionEndMs(state), [state]);
@@ -215,6 +276,13 @@ export function useTranscript(): UseTranscript {
     setStick,
     clear,
     engine,
+    toggleBookmark,
+    searchOpen,
+    query,
+    setQuery,
+    openSearch,
+    closeSearch,
+    matchCount,
   };
 }
 

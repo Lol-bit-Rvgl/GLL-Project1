@@ -25,6 +25,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use lyricstream_asr::engine::{EngineError, EngineInfo};
+use lyricstream_asr::mini_window::MiniEstado;
 use lyricstream_asr::model::{ModelInfo, ModelManager, ModelSpec};
 use lyricstream_asr::whisper_engine::{self, WhisperEngine};
 use lyricstream_asr::worker::{SttWorker, TranscriptionSegment, WorkerConfig, WorkerStats};
@@ -39,6 +40,14 @@ pub const EVENT_DOWNLOAD_RESULT: &str = "model-download-result";
 pub const EVENT_TRANSCRIPTION: &str = "transcription-segment";
 /// Evento de cambio de estado del motor.
 pub const EVENT_ENGINE_STATUS: &str = "stt-engine-status";
+/// Evento de cambio del modo mini-ventana.
+///
+/// Se emite, ademas de responder al comando, para que el cambio de modo llegue a la UI
+/// por un unico camino y no solo como respuesta de quien lo pidio. El nombre tiene que
+/// coincidir con `EVENTS.miniMode` en `src/lib/types.ts`; un renombrado en un lado y no en
+/// el otro no da error de compilacion, y la ventana encoge mientras la UI se queda en
+/// grande.
+pub const EVENT_MINI_MODE: &str = "mini-mode-changed";
 
 /// Modelo que usa la app mientras se integra el runtime de inferencia.
 pub const ACTIVE_MODEL: ModelSpec = ModelSpec::WHISPER_TINY_Q5_1;
@@ -71,6 +80,19 @@ pub struct EngineStatus {
   pub stats: WorkerStats,
 }
 
+/// Estado del modo mini-ventana, lo que ve la UI.
+///
+/// Va en `camelCase` (`rename_all`), a diferencia de `EngineStatus`, que no lo lleva y
+/// manda `snake_case`. Con un solo campo la diferencia no se ve, pero se deja escrito
+/// para que anadir el segundo (`width`, `height`) no introduzca una mezcla de convenciones
+/// mas en este contrato, que ya de por si es irregular.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MiniModeStatus {
+  /// `true` si la ventana esta en modo compacto.
+  pub active: bool,
+}
+
 /// Estado gestionado por Tauri.
 pub struct SttState {
   audio: Arc<lyricstream_audio::AudioEngine>,
@@ -86,6 +108,13 @@ pub struct SttState {
   /// es lo que permite que `status()` distinga "transcribiendo de verdad" de "el
   /// runtime no estaba".
   engine: Mutex<EngineInfo>,
+  /// Estado de la mini-ventana: si esta activa y que geometria hay que restaurar.
+  ///
+  /// Un `Mutex` y no un `Cell` porque el comando lo invoca el hilo de Tauri y el
+  /// `setup` lo tocaria en el de arranque. La geometria anterior no se guarda en el
+  /// SO: se guarda aqui, porque en `tauri.conf.json` solo esta la geometria inicial y no
+  /// hay forma de leer de ahi la ventana que el usuario ha dejado.
+  mini: Mutex<MiniEstado>,
 }
 
 impl SttState {
@@ -104,6 +133,7 @@ impl SttState {
         false,
         "el worker de STT no ha arrancado todavia",
       )),
+      mini: Mutex::new(MiniEstado::new()),
     }
   }
 
@@ -115,6 +145,15 @@ impl SttState {
   /// El gestor de pesos.
   pub fn models(&self) -> &ModelManager {
     &self.models
+  }
+
+  /// El estado de la mini-ventana.
+  ///
+  /// Devuelve el `Mutex` y no un `&MiniEstado`: el comando tiene que alternar el modo, y
+  /// sacar el estado con un cerrojo ya tomado obligaria a que el cerrojo viviera en el
+  /// comando, o sea en el hilo de Tauri, y a poder colgarse si otro comando lo toma antes.
+  pub fn mini(&self) -> &Mutex<MiniEstado> {
+    &self.mini
   }
 
   /// Estado del modelo en disco.

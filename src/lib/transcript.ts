@@ -35,6 +35,8 @@ export type Block = {
   startMs: number;
   /** Duracion de la frase, en ms. */
   durationMs: number;
+  /** `true` si el bloque esta marcado como punto clave. */
+  bookmarked?: boolean;
 };
 
 /** Texto del segmento en curso, separado de los bloques ya cerrados. */
@@ -164,6 +166,45 @@ export function fullText(state: TranscriptState): string {
   const closed = state.blocks.map((block) => block.text);
   const open = state.interim.text.trim() === "" ? [] : [state.interim.text];
   return joinIncrements([...closed, ...open]);
+}
+
+/**
+ * Alterna el marcador de un bloque y devuelve el historial nuevo.
+ *
+ * # Por que vive aqui y no en el componente
+ *
+ * Es la misma razon que `reduce`: la accion llega por un atajo de teclado, y el atajo
+ * esta a un componente de distancia del que pinta la lista. Si la mutacion se hiciera en
+ * el boton, el `Ctrl+B` tendria que duplicarla, y en cuanto las dos copias se
+ * desincronizasen el atajo y el boton marcarian frases distintas.
+ *
+ * Un bloque marcado no se toca: se devuelve una copia con `bookmarked` invertido y el
+ * resto del historial con las mismas referencias. Cambiar el estado de un bloque sin
+ * re-renderizar el resto es justo lo que evita el tirón cuando el historial tiene
+ * cientos de frases.
+ */
+export function toggleBookmark(state: TranscriptState, id: number): TranscriptState {
+  let encontrado = false;
+  const blocks = state.blocks.map((block) => {
+    if (block.id !== id) return block;
+    encontrado = true;
+    return { ...block, bookmarked: !block.bookmarked };
+  });
+  // Un id que no existe no cambia el estado: devolver el mismo objeto evita que el
+  // historial entero se re-renderice por un atajo que no iba a marcar nada.
+  if (!encontrado) return state;
+  return { ...state, blocks };
+}
+
+/**
+ * Los bloques marcados, en orden.
+ *
+ * Recibe la lista y no el estado entero: es lo que necesita, y asi la UI puede pasarsela
+ * sin construir un `TranscriptState` a medias. Es lo que va a la cabecera del Markdown y
+ * lo que cuenta la insignia del boton.
+ */
+export function bookmarkedBlocks(blocks: readonly Block[]): Block[] {
+  return blocks.filter((block) => block.bookmarked === true);
 }
 
 /**

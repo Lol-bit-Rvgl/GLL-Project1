@@ -447,6 +447,202 @@ function testLosDosKeyframesDeEntradaSonDistintos() {
 }
 
 // --------------------------------------------------------------------------
+// 12. El buscador no usa `RegExp`.
+//
+// La tentacion es `new RegExp(texto, "gi")`, que ademas resuelve el `g` de golpe. Pero un
+// patron como `a|a|a|a` contra una frase larga hace trabajo exponencial (ReDoS), y este
+// buscador corre en el MISMO hilo que pinta la transcripcion: un texto de busqueda raro
+// congela la ventana entera. Aqui se comparan subcadenas, que es lineal.
+//
+// Los comentarios del fichero mencionan `new RegExp(texto, "gi")` como el antipatron, asi
+// que hay que quitarlos antes de comprobar: si no, el test fallaria por su propia
+// documentacion.
+// --------------------------------------------------------------------------
+function sinComentarios(texto) {
+  // Bloque `/* ... */` (incluye el de documentacion `/** ... */`) y luego linea `// ...`.
+  return texto.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/\/\/[^\n]*/gu, "");
+}
+
+function testElBuscadorNoUsaRegExp() {
+  const rel = "src/lib/search.ts";
+  const limpio = sinComentarios(fuente(rel));
+
+  assert.ok(
+    !/new RegExp\(/u.test(limpio),
+    "el buscador vuelve a construir un `RegExp` en " + rel + ". `new RegExp(texto, \"gi\")` " +
+      "se pone en ReDoS con pocos caracteres y corre en el hilo que pinta la " +
+      "transcripcion, asi que la ventana entera se congela.",
+  );
+  assert.ok(
+    /\.indexOf\(/u.test(limpio),
+    "el buscador ya no usa `indexOf`: si no compara subcadenas, con que compara? " +
+      "El motor de subcadenas es lo que lo hace lineal.",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 13. El acento del bloque marcado usa los tokens del tema, no la rampa cruda.
+//
+// El pedido original decia `border-amber-400 bg-amber-500/10`, que es la rampa cruda de
+// Tailwind. `AGENTS.md` explica que los tokens existen justo para que nadie escriba
+// `amber-400` en un sitio y `orange-500` en otro pensando que son el mismo color, y la
+// hoja generada se verifica contra los tokens. El acento es `border-flare bg-flare/...`.
+//
+// Se comprueba sobre el fuente sin comentarios, porque el comentario de `BlockRow`
+// explica el antipatron y nombrarlo forma parte de la explicacion.
+// --------------------------------------------------------------------------
+function testElAcentoDelMarcadorUsaLosTokens() {
+  const rel = "src/components/TranscriptStream.tsx";
+  const limpio = sinComentarios(fuente(rel));
+
+  const rampa = limpio.match(/\b(?:amber|orange|yellow|red)-\d{2,3}\b/u);
+  assert.ok(
+    rampa === null,
+    "el acento del bloque marcado vuelve a la rampa cruda (`" + rampa?.[0] + "`). Los " +
+      "tokens del tema existen para que el ambar sea uno solo; usa `border-flare` y " +
+      "`bg-flare/...`.",
+  );
+  assert.ok(
+    /\bborder-flare\b/u.test(limpio),
+    "el bloque marcado ya no lleva `border-flare`: el acento del tema ha desaparecido " +
+      "del marcador.",
+  );
+  assert.ok(
+    /\bbg-flare\/\[/u.test(limpio),
+    "el bloque marcado ya no tiñe el fondo con una opacidad del token `flare` " +
+      "(`bg-flare/[0.07]`).",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 14. La ventana no colapsa la altura: los dos espaciadores se pintan.
+//
+// Es la garantia central del esquema (`src/lib/windowing.ts`): la altura TOTAL no cambia
+// nunca, solo cambia cuantos `<div>` existen. Sin los dos espaciadores, el historial
+// viejo no ocupa sitio, el contenido de abajo sube y el usuario que lee la mitad ve
+// saltar el texto bajo el cursor en cada bloque cerrado.
+//
+// Los dos van `aria-hidden`: son hueco, no contenido, y no deben anunciarse.
+// --------------------------------------------------------------------------
+function testLaVentanaConservaLosEspaciadores() {
+  const rel = "src/components/TranscriptStream.tsx";
+  const texto = fuente(rel);
+
+  assert.ok(
+    /\{ventana\.arribaPx > 0 && \(/u.test(texto),
+    rel + " ya no pinta el espaciador de arriba (`ventana.arribaPx > 0 &&`). Sin el, el " +
+      "historial ventilado ocupa menos de lo que mide y el scroll salta.",
+  );
+  assert.ok(
+    /\{ventana\.abajoPx > 0 && \(/u.test(texto),
+    rel + " ya no pinta el espaciador de abajo (`ventana.abajoPx > 0 &&`).",
+  );
+
+  for (const lado of ["arribaPx", "abajoPx"]) {
+    const espaciador = texto.match(
+      new RegExp("height: ventana\\." + lado + "\\s*\\}", "u"),
+    );
+    assert.ok(
+      espaciador !== null,
+      rel + " no da altura al espaciador con `ventana." + lado + "`.",
+    );
+  }
+  const aria = [...texto.matchAll(/style=\{\{ height: ventana\.\w+Px \}\}([^>]*)/gu)];
+  assert.ok(aria.length >= 2, "no se encuentran los dos divs de hueco en " + rel);
+  for (const m of aria) {
+    assert.ok(
+      /aria-hidden="true"/u.test(m[1]),
+      "un espaciador de la ventana no lleva `aria-hidden`: es hueco y el lector de " +
+        "pantalla lo anunciaria.",
+    );
+  }
+}
+
+// --------------------------------------------------------------------------
+// 15. El evento del modo mini coincide entre TypeScript y Rust.
+//
+// El nombre del evento esta escrito dos veces: la constante `EVENTS.miniMode` en
+// `src/lib/types.ts` y `EVENT_MINI_MODE` en `src-tauri/src/stt.rs`. Rust lo emite y TS lo
+// escucha. Un cambio en uno y no en el otro NO da error de compilacion: el modo mini se
+// activa, la ventana encoge y la UI se queda en grande porque el evento nunca llega.
+// Se comparan las dos cadenas.
+// --------------------------------------------------------------------------
+function testElEventoDelModoMiniCoincide() {
+  const ts = fuente("src/lib/types.ts");
+  const rs = fuente("src-tauri/src/stt.rs");
+
+  const enTs = ts.match(/miniMode:\s*"([^"]+)"/u);
+  assert.ok(enTs, "no se encuentra `miniMode: \"...\"` en src/lib/types.ts");
+  const enRs = rs.match(/EVENT_MINI_MODE\s*:\s*&?str\s*=\s*"([^"]+)"/u);
+  assert.ok(enRs, "no se encuentra `EVENT_MINI_MODE: &str = \"...\"` en src-tauri/src/stt.rs");
+
+  assert.equal(
+    enTs[1],
+    enRs[1],
+    "el evento del modo mini no coincide: TS escucha \"" + enTs[1] + "\" y Rust emite \"" +
+      enRs[1] + "\". El modo mini se activaria sin que la UI se enterase.",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 16. El atajo cede el paso cuando el foco esta en un campo de texto.
+//
+// `Ctrl+B` en un campo es negrita del navegador. Si el atajo se lo queda, escribir en
+// cualquier campo de la app (renombrar una pista, por ejemplo) marcaria la ultima frase
+// cada vez que alguien pusiera negrita. Se comprueba que el guardia existe.
+// --------------------------------------------------------------------------
+function testElAtajoCedeEnLosCamposDeTexto() {
+  const rel = "src/lib/useShortcuts.ts";
+  const texto = fuente(rel);
+
+  assert.ok(
+    /isContentEditable/u.test(texto),
+    rel + " ya no comprueba `isContentEditable`: el atajo se quedaria con los eventos de " +
+      "un editor de texto enriquecido.",
+  );
+  assert.ok(
+    /tagName/u.test(texto) && /"INPUT"/u.test(texto) && /"TEXTAREA"/u.test(texto),
+    rel + " ya no mira `tagName` para distinguir un `INPUT`/`TEXTAREA` del resto. Sin " +
+      "eso, `Ctrl+B` no cede el paso en ningun campo.",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 17. El modo mini lo decide el backend, no un estado local de la UI.
+//
+// El tamano de la ventana, el `always_on_top` y el minimo son de Rust. Si la UI se
+// limitara a un `useState` y a cambiar su propia maqueta, la ventana seguiria a tamano
+// completo con el aviso de transcripcion dentro, que es justo lo que el modo mini
+// existe para evitar. Se comprueba que la pagina habla con los dos comandos y que no
+// redimensiona la ventana por su cuenta.
+// --------------------------------------------------------------------------
+function testElModoMiniLoDecideElBackend() {
+  const rel = "src/app/page.tsx";
+  const texto = fuente(rel);
+
+  assert.ok(
+    /"toggle_mini_mode"/u.test(texto),
+    rel + " no llama a `toggle_mini_mode`: la UI decidiria el modo mini por su cuenta y " +
+      "la ventana de Tauri no cambiaria de tamano.",
+  );
+  assert.ok(
+    /"get_mini_mode"/u.test(texto),
+    rel + " no llama a `get_mini_mode`: al recargar la webview con la mini activa, la UI " +
+      "no sabria en que modo esta.",
+  );
+  assert.ok(
+    /EVENTS\.miniMode/u.test(texto),
+    rel + " no escucha `EVENTS.miniMode`: si el backend cambia el modo por otra via, la " +
+      "UI se quedaria desincronizada.",
+  );
+  assert.ok(
+    !/\b(?:setSize|LogicalSize|PhysicalSize)\s*\(/u.test(texto),
+    rel + " redimensiona la ventana desde la UI (`setSize`/`LogicalSize`). El tamano del " +
+      "modo mini es geometria de Rust y se decide alli.",
+  );
+}
+
+// --------------------------------------------------------------------------
 // Arranque
 // --------------------------------------------------------------------------
 const tests = [
@@ -461,6 +657,12 @@ const tests = [
   ["el contador de frases se deriva, no se cuenta en un efecto", testElContadorSeDerivaYNoUsaEfecto],
   ["el dialogo de confirmar va en un portal", testElDialogoDeConfirmacionVaEnUnPortal],
   ["fade-in y slide-up-fade son keyframes distintos", testLosDosKeyframesDeEntradaSonDistintos],
+  ["el buscador no usa RegExp (evita el ReDoS en el hilo de pintado)", testElBuscadorNoUsaRegExp],
+  ["el acento del marcador usa los tokens del tema", testElAcentoDelMarcadorUsaLosTokens],
+  ["la ventana conserva los dos espaciadores de altura", testLaVentanaConservaLosEspaciadores],
+  ["el evento del modo mini coincide entre TypeScript y Rust", testElEventoDelModoMiniCoincide],
+  ["el atajo cede el paso en los campos de texto", testElAtajoCedeEnLosCamposDeTexto],
+  ["el modo mini lo decide el backend", testElModoMiniLoDecideElBackend],
 ];
 
 let fallos = 0;

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Canal de texto: bloques consolidados y el segmento en curso.
+ * Canal de texto: bloques consolidados, el segmento en curso, marcadores y busqueda.
  *
  * # El autoscroll
  *
@@ -11,36 +11,50 @@
  * mas arriba y se suelta el "pegado". En cuanto vuelve al fondo, se vuelve a pegar
  * solo, sin que tenga que tocar nada.
  *
- * # Por que el parcial no re-pinta el historial
+ * # El contador de frases sin leer se DERIVA
  *
- * El texto en curso va en un nodo aparte del historial. Un parcial cambia `interim` y
- * nada mas, asi que React solo toca la ultima linea. Es lo que evita el tiron cuando
- * entra una frase de 30 palabras en mitad de la sesion.
+ * El estado guarda el ANCLA (cuantos bloques habia cuando el usuario se solto del
+ * final) y el numero sale de `blocks.length - anchor` durante el render. Un contador de
+ * verdad tendria que incrementarse al llegar un bloque, y eso solo se puede hacer desde
+ * un efecto: un `setState` por frase, que ademas pinta el historial entero una vez mas.
+ * El ancla solo se mueve al CRUZAR el umbral, no en cada evento de scroll, o subir y
+ * bajar un poco lo pondria a cero.
  *
- * # Por que `max-w-4xl` y centrado
+ * # La ventana de renderizado no mueve el scroll
  *
- * Una linea de texto de 144 caracteres a pantalla completa es incomoda de leer: el ojo
- * pierde el sitio al volver de una linea a la siguiente. Limitar el ancho hace que el
- * canal se lea como una columna, y de paso da un borde fijo al bloque para que la
- * fecha de la izquierda no dance de linea en linea.
+ * Por encima de 150 bloques solo se pintan los que caben mas un margen, y el hueco se
+ * cubre con dos espaciadores de altura calculada (`planVentana`, en `src/lib/windowing.ts`).
+ * La ALTURA TOTAL no cambia nunca, que es lo importante: si colapsaramos el historial
+ * viejo, el usuario que esta leyendo la mitad veria como le salta el texto debajo. El
+ * alto por bloque es una estimacion, no una medida, asi que el pulgar puede no caer
+ * exactamente sobre la ultima frase.
  *
- * # Por que el bloque lleva borde y no padding de fecha
+ * El rango se recalcula en el manejador de scroll, y SOLO se publica como estado cuando
+ * cambia de verdad (`mismaVentana`): si no, cada pixel de scroll pintaria el historial
+ * entero, que es justo lo que la ventana evita.
  *
- * Una columna de texto con el reloj en un `span` al principio obliga a reservar el hueco
- * con un margen, y ese hueco se ve como un canal vacio en las frases cortas. El borde
- * izquierdo con `pl-4` hace las dos cosas: marca la frase y separa el reloj, sin dejar
- * nada sin contenido en medio.
+ * # El resaltado no re-renderiza el reducer
  *
- * # Donde NO esta el halo ambiental
+ * Las partes se trocean con `highlight` (`src/lib/search.ts`), que es lineal y no usa
+ * `RegExp`: un buscador con `new RegExp(texto, "gi")` es un ReDoS esperando a ocurrir y
+ * corre en el mismo hilo que pinta la transcripcion. El timestamp y el texto se
+ * separan ANTES de trocear, para que una coincidencia en el reloj no se cuele
+ * dentro de la palabra.
  *
- * Vive una sola vez, en el `main` de `page.tsx`. Este componente no lo monta: dos capas
- * de `amber-pulse` respirando a la vez sobre el mismo sitio darian al ojo el doble de
- * resplandor del que pide el diseno, y ademas pagarian el pintado dos veces.
+ * # Un atajo, no un boton por cada cosa
+ *
+ * `Ctrl+B` marca y `Ctrl+F` busca. Los dos tienen ademas su boton, porque un atajo sin
+ * boton no se descubre y un boton sin atajo no se usa con el teclado. Al abrir el
+ * buscador el foco va al campo, lo mismo con el boton que con `Ctrl+F`, para que
+ * escribir funcione sin un clic extra.
  */
 
-import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { clock } from "@/lib/format";
+import { SearchBar } from "@/components/SearchBar";
+import { highlight } from "@/lib/search";
+import { ALTO_BLOQUE_ESTIMADO, mismaVentana, planVentana, ventanaCompleta } from "@/lib/windowing";
 import type { Block } from "@/lib/transcript";
 
 /** Margen bajo el cual se considera que el usuario esta "al final". */
@@ -60,6 +74,18 @@ export type TranscriptStreamProps = {
   engineReady: boolean;
   /** `true` si hay captura. */
   capturing: boolean;
+  /** Texto del buscador. Cadena vacia cuando esta cerrado. */
+  query: string;
+  /** Fija el texto del buscador. */
+  setQuery: (value: string) => void;
+  /** `true` si el buscador esta abierto. Sube al recibir el atajo o el boton. */
+  searchOpen: boolean;
+  /** Numero de coincidencias del historial entero, para la etiqueta. */
+  matchCount: number;
+  /** Marca o desmarca el bloque, en el historial. */
+  onToggleBookmark: (id: number) => void;
+  /** Cierra el buscador con Escape. */
+  onDismissSearch: () => void;
 };
 
 function TranscriptStreamImpl({
@@ -70,6 +96,12 @@ function TranscriptStreamImpl({
   onStickChange,
   engineReady,
   capturing,
+  query,
+  setQuery,
+  searchOpen,
+  matchCount,
+  onToggleBookmark,
+  onDismissSearch,
 }: TranscriptStreamProps) {
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -78,23 +110,27 @@ function TranscriptStreamImpl({
    *
    * `null` significa "pegado al final", o sea que no hay nada sin leer. Al soltarse se
    * fija al numero de bloques que hay en ese instante, y a partir de ahi el contador es
-   * `blocks.length - anchor`, que crece solo con laProps.
-   *
-   * # Por que un ancla y no un contador
-   *
-   * Un contador de "nuevas" tendria que incrementarse cuando llega un bloque, y eso solo
-   * se puede hacer desde un efecto sobre las props. Aqui el estado no cuenta: guarda el
-   * punto de partida, y la cuenta se deriva durante el render. Consecuencia practica:
-   * ningun `setState` vive en un efecto y el boton no necesita un temporizador ni una
-   * bandera para saber si el numero es real.
-   *
-   * # Por que se fija al soltarse y no en cada scroll
-   *
-   * Si el ancla se moviera en cada evento de scroll, subir y bajar un poco lo pondria a
-   * cero y el contador volveria a empezar. Solo se mueve al cruzar el umbral, que es lo
-   * que el usuario percibe como "me he soltado".
+   * `blocks.length - anchor`, que crece solo con las props.
    */
   const [anchor, setAnchor] = useState<number | null>(null);
+
+  // Rango de bloques pintados. Se publica desde el manejador de scroll y desde el
+  // efecto de pegado, nunca en el cuerpo del render.
+  //
+  // No lleva un `ref` espejo: el `setRango` funcional recibe el valor anterior, y eso es
+  // lo que se compara contra el plan nuevo (`mismaVentana`). Un espejo escrito en el
+  // render seria justo lo que la regla `react-hooks/refs` prohibe, y no hacia falta.
+  const [rango, setRango] = useState(() => ventanaCompleta(0));
+
+  // `buscando` es "hay texto escrito" y `barAbierto` es "el buscador esta visible". No
+  // son lo mismo: se puede tener el buscador abierto y el campo vacio, que es
+  // precisamente el estado en el que se empieza a escribir.
+  const buscando = query.trim() !== "";
+  // Con el buscador abierto se pinta el historial entero: el usuario esta leyendo
+  // resultados, no scrolleando, y un texto que se recorta mientras busca parece que no
+  // encuentra lo que hay. El coste de memoria es el que es, y esta acotado por el texto
+  // que el usuario ha pedido ver.
+  const ventana = buscando ? ventanaCompleta(blocks.length) : rango;
 
   // `useLayoutEffect` y no `useEffect`: el scroll tiene que estar puesto ANTES de
   // que el navegador pinte, o se ve un salto desde arriba en cada frase nueva. Con
@@ -105,6 +141,16 @@ function TranscriptStreamImpl({
     const node = scroller.current;
     if (node === null) return;
     node.scrollTop = node.scrollHeight;
+    setRango((prev) => {
+      const siguiente = planVentana(
+        blocks.length,
+        node.scrollTop,
+        node.clientHeight,
+        ALTO_BLOQUE_ESTIMADO,
+      );
+      if (mismaVentana(prev, siguiente)) return prev;
+      return siguiente;
+    });
   }, [blocks, interim, stickToBottom]);
 
   const onScroll = useCallback(() => {
@@ -117,7 +163,22 @@ function TranscriptStreamImpl({
       if (atBottom) return null;
       return prev === null ? count : prev;
     });
+    setRango((prev) => {
+      const siguiente = planVentana(count, node.scrollTop, node.clientHeight, ALTO_BLOQUE_ESTIMADO);
+      if (mismaVentana(prev, siguiente)) return prev;
+      return siguiente;
+    });
   }, [blocks.length, onStickChange]);
+
+  const onKey = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Escape" && searchOpen) {
+        event.preventDefault();
+        onDismissSearch();
+      }
+    },
+    [searchOpen, onDismissSearch],
+  );
 
   const unread = anchor === null ? 0 : Math.max(0, blocks.length - anchor);
 
@@ -130,35 +191,43 @@ function TranscriptStreamImpl({
 
   return (
     <section className="relative flex min-h-0 flex-1 flex-col">
+      {searchOpen && (
+        <SearchBar
+          query={query}
+          setQuery={setQuery}
+          matchCount={matchCount}
+          onClose={onDismissSearch}
+          open={searchOpen}
+        />
+      )}
+
       <div
         ref={scroller}
         onScroll={onScroll}
+        onKeyDown={onKey}
         className="scrollbar-thin relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5"
       >
         {empty ? (
           <EmptyState capturing={capturing} engineReady={engineReady} />
         ) : (
           <div className="mx-auto w-full max-w-4xl">
-            {blocks.map((block) => (
-              <div
+            {ventana.arribaPx > 0 && (
+              <div style={{ height: ventana.arribaPx }} aria-hidden="true" />
+            )}
+
+            {blocks.slice(ventana.from, ventana.to).map((block) => (
+              <BlockRow
                 key={block.id}
-                className="motion-safe:animate-[slide-up-fade_320ms_ease-out] border-l-2 border-neon/40 pl-4
-                           transition-colors duration-500 hover:border-neon/70"
-              >
-                <p className="mb-3 text-[1.0625rem] leading-7 text-snow">
-                  {/* Sin el modificador de opacidad. Con `text-flare/60` el navegador
-                      compone #ff9d00 al 60 % sobre obsidian y el timestamp acaba
-                      pintandose #9c6108, que ya no es el ambar del tema y ademas se
-                      queda en 3.92:1, por debajo del 4.5:1 que WCAG AA pide para texto
-                      de 12 px. A opacidad plena son 9.55:1. Medido sobre la app en
-                      ejecucion, no estimado. */}
-                  <span className="mr-3 select-none font-mono text-xs text-flare tabular-nums">
-                    {clock(block.startMs)}
-                  </span>
-                  {block.text}
-                </p>
-              </div>
+                block={block}
+                query={query}
+                onToggle={onToggleBookmark}
+              />
             ))}
+
+            {ventana.abajoPx > 0 && (
+              <div style={{ height: ventana.abajoPx }} aria-hidden="true" />
+            )}
+
             {speaking && (
               <div className="border-l-2 border-neon/70 pl-4">
                 {/* El parcial va en `ember` a peso medio: es texto provisional, pero es la
@@ -220,6 +289,101 @@ function TranscriptStreamImpl({
     </section>
   );
 }
+
+/**
+ * Una fila del historial: reloj, texto, resaltado y bandera.
+ *
+ * Va en su propio componente para que el resaltado no re-renderice el canal entero. Con
+ * el buscador abierto solo cambian las filas que contienen la palabra, y como `block`
+ * es una referencia distinta solo en esas, React no toca el resto. El `memo` es lo que
+ * hace que eso sea cierto: sin el, el padre re-renderiza y todos los hijos tambien.
+ *
+ * El acento de bloque marcado es `border-flare` sobre `bg-flare/[0.07]`, que es el
+ * ambar del tema a plena intensidad. Con la rampa cruda de Tailwind (`border-amber-400
+ * bg-amber-500/10`) el resultado se pareceria, pero `AGENTS.md` explica que los tokens
+ * existen justo para que nadie escriba `amber-400` en un sitio y `orange-500` en otro
+ * pensando que son el mismo color, y este repo verifica la hoja generada contra los
+ * tokens.
+ */
+const BlockRow = memo(function BlockRow({
+  block,
+  query,
+  onToggle,
+}: {
+  block: Block;
+  query: string;
+  onToggle: (id: number) => void;
+}) {
+  const partes = useMemo(() => highlight(block.text, query), [block.text, query]);
+  const marcado = block.bookmarked === true;
+
+  return (
+    <div
+      data-bloque={block.id}
+      className={`group relative motion-safe:animate-[slide-up-fade_320ms_ease-out] border-l-2 pl-4
+                  transition-colors duration-500 ${
+                    marcado
+                      ? "border-flare bg-flare/[0.07] hover:border-flare"
+                      : "border-neon/40 hover:border-neon/70"
+                  }`}
+    >
+      <p className="mb-3 text-[1.0625rem] leading-7 text-snow">
+        {/* Sin el modificador de opacidad. Con `text-flare/60` el navegador compone
+            #ff9d00 al 60 % sobre obsidian y el timestamp acaba pintandose #9c6108, que
+            ya no es el ambar del tema y ademas se queda en 3.92:1, por debajo del 4.5:1
+            que WCAG AA pide para texto de 12 px. A opacidad plena son 9.55:1. Medido
+            sobre la app en ejecucion, no estimado. */}
+        <span className="mr-3 select-none font-mono text-xs text-flare tabular-nums">
+          {clock(block.startMs)}
+        </span>
+        {partes === null ? (
+          block.text
+        ) : (
+          partes.map((parte, i) =>
+            parte.hit ? (
+              // `mark` no es decoracion: es el resultado de la busqueda que el usuario
+              // acaba de pedir, asi que va con su fondo y su `rounded`. Se usa el ambar
+              // solido del tema sobre el texto, que es lo unico que asegura contraste
+              // contra obsidian sin medir nada.
+              <mark key={i} className="rounded-[2px] bg-flare px-0.5 text-obsidian">
+                {parte.text}
+              </mark>
+            ) : (
+              <span key={i}>{parte.text}</span>
+            ),
+          )
+        )}
+      </p>
+
+      {/*
+        La bandera es un boton real y no un `div` con `onClick`: con el raton funciona
+        igual, pero asi el tabulador la alcanza y se marca con Enter. Se deja oculta
+        (`opacity-0`) hasta que la fila tiene el foco o el puntero encima, porque 500
+        banderas visibles serian ruido; `focus-visible` la saca tambien al tabular, que
+        es el caso en el que un elemento invisible de verdad seria un fallo.
+      */}
+      <button
+        type="button"
+        onClick={() => onToggle(block.id)}
+        aria-pressed={marcado}
+        aria-label={marcado ? `Quitar el marcador de la frase de las ${clock(block.startMs)}` : `Marcar la frase de las ${clock(block.startMs)}`}
+        title={marcado ? "Quitar marcador (Ctrl+B)" : "Marcar como punto clave (Ctrl+B)"}
+        className={`absolute -left-2 top-0.5 flex h-6 w-6 items-center justify-center rounded-full
+                    border transition-all duration-200
+                    focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2
+                    focus-visible:outline-neon ${
+                      marcado
+                        ? "border-flare bg-flare/20 opacity-100"
+                        : "border-neon/20 bg-panel/80 opacity-0 group-hover:opacity-100 hover:border-neon/60"
+                    }`}
+      >
+        <svg viewBox="0 0 16 16" className="h-3 w-3 fill-current" aria-hidden="true">
+          <path d="M4 1.5h8l-1.2 4 1.2 4H8.6V14.5H7.4V9.5H4l1.2-4z" />
+        </svg>
+      </button>
+    </div>
+  );
+});
 
 function EmptyState({ capturing, engineReady }: { capturing: boolean; engineReady: boolean }) {
   const message = !capturing
