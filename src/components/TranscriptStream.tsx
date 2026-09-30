@@ -111,7 +111,13 @@ function TranscriptStreamImpl({
                            transition-colors duration-500 hover:border-neon/70"
               >
                 <p className="mb-3 text-[1.0625rem] leading-7 text-snow">
-                  <span className="mr-3 select-none font-mono text-xs text-flare/60 tabular-nums">
+                  {/* Sin el modificador de opacidad. Con `text-flare/60` el navegador
+                      compone #ff9d00 al 60 % sobre obsidian y el timestamp acaba
+                      pintandose #9c6108, que ya no es el ambar del tema y ademas se
+                      queda en 3.92:1, por debajo del 4.5:1 que WCAG AA pide para texto
+                      de 12 px. A opacidad plena son 9.55:1. Medido sobre la app en
+                      ejecucion, no estimado. */}
+                  <span className="mr-3 select-none font-mono text-xs text-flare tabular-nums">
                     {clock(block.startMs)}
                   </span>
                   {block.text}
