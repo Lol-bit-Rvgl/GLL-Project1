@@ -14,8 +14,28 @@
  * # Por que el parcial no re-pinta el historial
  *
  * El texto en curso va en un nodo aparte del historial. Un parcial cambia `interim` y
- * nada mas, asi que React solo toca la ultima linea. Es lo que evita el tirón cuando
+ * nada mas, asi que React solo toca la ultima linea. Es lo que evita el tiron cuando
  * entra una frase de 30 palabras en mitad de la sesion.
+ *
+ * # Por que `max-w-4xl` y centrado
+ *
+ * Una linea de texto de 144 caracteres a pantalla completa es incomoda de leer: el ojo
+ * pierde el sitio al volver de una linea a la siguiente. Limitar el ancho hace que el
+ * canal se lea como una columna, y de paso da un borde fijo al bloque para que la
+ * fecha de la izquierda no dance de linea en linea.
+ *
+ * # Por que el bloque lleva borde y no padding de fecha
+ *
+ * Una columna de texto con el reloj en un `span` al principio obliga a reservar el hueco
+ * con un margen, y ese hueco se ve como un canal vacio en las frases cortas. El borde
+ * izquierdo con `pl-4` hace las dos cosas: marca la frase y separa el reloj, sin dejar
+ * nada sin contenido en medio.
+ *
+ * # Donde NO esta el halo ambiental
+ *
+ * Vive una sola vez, en el `main` de `page.tsx`. Este componente no lo monta: dos capas
+ * de `amber-pulse` respirando a la vez sobre el mismo sitio darian al ojo el doble de
+ * resplandor del que pide el diseno, y ademas pagarian el pintado dos veces.
  */
 
 import { memo, useCallback, useLayoutEffect, useRef } from "react";
@@ -78,33 +98,41 @@ function TranscriptStreamImpl({
       <div
         ref={scroller}
         onScroll={onScroll}
-        className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5"
+        className="scrollbar-thin relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5"
       >
         {empty ? (
           <EmptyState capturing={capturing} engineReady={engineReady} />
         ) : (
-          <>
+          <div className="mx-auto w-full max-w-4xl">
             {blocks.map((block) => (
-              <p key={block.id} className="mb-3 text-[1.0625rem] leading-7">
-                <span className="mr-3 select-none font-mono text-xs text-neutral-600 tabular-nums">
-                  {clock(block.startMs)}
-                </span>
-                <span className="text-neutral-100">{block.text}</span>
-              </p>
+              <div
+                key={block.id}
+                className="animate-[fade-in_260ms_ease-out] border-l-2 border-neon/40 pl-4
+                           transition-colors duration-500 hover:border-neon/70"
+              >
+                <p className="mb-3 text-[1.0625rem] leading-7 text-snow">
+                  <span className="mr-3 select-none font-mono text-xs text-flare/60 tabular-nums">
+                    {clock(block.startMs)}
+                  </span>
+                  {block.text}
+                </p>
+              </div>
             ))}
             {speaking && (
-              <p className="text-[1.0625rem] leading-7 text-sky-200/80">
-                {interim.trim() === "" ? (
-                  <span className="caret" />
-                ) : (
-                  <>
-                    <span className="select-none whitespace-pre-wrap">{interim}</span>
+              <div className="border-l-2 border-neon/70 pl-4">
+                <p className="text-[1.0625rem] leading-7 text-ember">
+                  {interim.trim() === "" ? (
                     <span className="caret" />
-                  </>
-                )}
-              </p>
+                  ) : (
+                    <>
+                      <span className="select-none whitespace-pre-wrap">{interim}</span>
+                      <span className="caret" />
+                    </>
+                  )}
+                </p>
+              </div>
             )}
-          </>
+          </div>
         )}
       </div>
 
@@ -114,10 +142,10 @@ function TranscriptStreamImpl({
         <button
           type="button"
           onClick={() => onStickChange(true)}
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-neutral-700
-                     bg-neutral-900/90 px-3 py-1.5 text-xs text-neutral-200 shadow-lg
-                     backdrop-blur transition-colors hover:border-neutral-500 hover:text-white
-                     focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-neon/30
+                     bg-panel/90 px-3 py-1.5 text-xs text-snow shadow-lg
+                     backdrop-blur transition-colors hover:border-neon/70 hover:text-white
+                     focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neon"
         >
           Bajar al final
         </button>
@@ -134,7 +162,7 @@ function EmptyState({ capturing, engineReady }: { capturing: boolean; engineRead
       : "Escuchando. Empieza a hablar y el texto aparecera aqui.";
   return (
     <div className="flex h-full min-h-48 items-center justify-center">
-      <p className="max-w-sm text-center text-sm text-neutral-500">{message}</p>
+      <p className="max-w-sm text-center text-sm text-slate-ink/70">{message}</p>
     </div>
   );
 }

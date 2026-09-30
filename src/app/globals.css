@@ -1,18 +1,28 @@
 @import "tailwindcss";
 
 /*
- * Dark por defecto, sin `prefers-color-scheme`.
+ * Dark Obsidian & Neon Amber.
  *
- * La version anterior cambiaba de tema segun el sistema con una media query, y el
- * resultado era una app con dos identidades: con el tema claro, el texto de la
- * transcripcion iba casi blanco sobre blanco, porque los componentes de texto ya
- * traian clases `text-neutral-*` pensadas para fondo oscuro. Una app de captura de
- * audio se usa de noche, con el brillo al minimo: un solo tema oscuro es la opcion
- * honesta, sin rama que mantener.
+ * # Por que un solo tema
+ *
+ * La version anterior conmutaba con `prefers-color-scheme` y dejaba texto casi blanco
+ * sobre blanco, porque los componentes ya traian clases `text-neutral-*` pensadas para
+ * fondo oscuro. Una app de captura de audio se usa de noche, con el brillo al minimo:
+ * un solo tema oscuro es la opcion honesta, sin rama que mantener.
+ *
+ * # Por que los acentos tienen nombre y no numeros
+ *
+ * Los tokens de color de Tailwind (`amber-400`, `orange-500`) son una rampa completa
+ * de tonos, y aqui solo hay cuatro naranjas que significan cosas distintas: el acento
+ * de marca, el pico del vumetro, el texto en curso y el resplandor. Si se usara la
+ * rampa, cada sitio tendria que repetir el numero y dos pantallas distintas podrian
+ * acabar en naranjas que no son el mismo. Los tokens de abajo son **sustitutos** del
+ * mapa de la marca, no una paleta nueva: renombrar `neon` a `amber-500` obligaria a
+ * tocar cada componente.
  */
 :root {
-  --background: #0a0a0a;
-  --foreground: #e5e5e5;
+  --background: #08090c;
+  --foreground: #f8fafc;
   color-scheme: dark;
 }
 
@@ -21,6 +31,28 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Superficies. Obsidiana es el fondo de la ventana; `panel` y `raised` son los dos
+     escalones que separan una tarjeta de la que esta encima. */
+  --color-obsidian: #08090c;
+  --color-panel: #101318;
+  --color-raised: #171b22;
+
+  /* Acentos. `neon` es la marca, `flare` y `gold` son las altas frecuencias. */
+  --color-neon: #ff6b00;
+  --color-flare: #ff9d00;
+  --color-gold: #ffb733;
+
+  /* Texto en curso: mas apagado que el acento, para que no compita con el cursor. */
+  --color-ember: #ffb066;
+
+  /* Texto. `snow` es el principal y `slate-ink` el secundario. */
+  --color-snow: #f8fafc;
+  --color-slate-ink: #94a3b8;
+
+  /* Verde oliva del vumetro: es el unico color que no es de la marca, y esta a proposito
+     para que "nivel bajo" y "naranja" no se confundan al leerlo de reojo. */
+  --color-olive: #8aa62b;
 }
 
 html,
@@ -43,11 +75,60 @@ body {
 }
 
 /*
- * Cursor de escritura al final del texto en curso.
+ * Halo ambiental.
  *
- * Es un elemento con `animate-pulse` en vez de `caret-blink` de Tailwind porque
- * este necesita una fuente monoespaciada, y el texto en curso va en la fuente de
- * cuerpo. Un bloque vacio con fondo se ve bien con cualquier fuente.
+ * # Por que un `div` con `pointer-events: none` y no un `::before` del body
+ *
+ * Un pseudo-elemento del `body` queda por debajo de todo el contenido y hay que
+ * subirlo con `z-index`, lo que obliga al resto del arbol a entrar en el
+ * apilamiento. Un sibling con `pointer-events: none` es invisible al raton y no
+ * necesita `z-index` alto porque es el primero en el DOM de su padre.
+ *
+ * # Por que solo anima `opacity`
+ *
+ * `opacity` es una de las dos propiedades (con `transform`) que el compositor mueve sin
+ * tocar la disposicion ni el pintado. Un `width`, un `left` o un `inset` en movimiento
+ * obligarian a recalcular la composicion de la pagina entera cada frame, y esta es una
+ * app que ya esta contending por el hilo principal con el STT.
+ *
+ * El elemento se estira con gradientes radiales de tamano fijo, y lo unico que respira
+ * es cuanto se ven. Con `will-change: opacity` el navegador lo sube a su propia capa y
+ * la animacion deja de participar en el pintado de las otras.
+ */
+.ambient-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  contain: strict;
+  background:
+    radial-gradient(60rem 40rem at 88% -10%, rgb(255 107 0 / 0.14), transparent 60%),
+    radial-gradient(40rem 30rem at 0% 108%, rgb(255 157 0 / 0.08), transparent 60%);
+  animation: amber-pulse 7s ease-in-out infinite;
+  will-change: opacity;
+}
+
+@keyframes amber-pulse {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/*
+ * Cursor de escritura del texto en curso.
+ *
+ * # Por que el brillo esta en el `box-shadow` y no en un pseudo-elemento
+ *
+ * Un halo con un `div` detras del cursor tendria que animarse en `transform` para no
+ * relayout, y por dentro del texto eso mueve el resto de la linea. El `box-shadow` de
+ * un borde de 2 px no genera caja nueva ni afecta al flujo: el texto no se mueve ni un
+ * pixel al parpadear, que es lo unico que importa cuando el parcial llega cada 500 ms.
+ *
+ * Se anima `box-shadow` en vez de `opacity` para que la punta del cursor siga solida: si
+ * el relleno parpadease, el texto en curso perdia el punto de insercion.
  */
 .caret {
   display: inline-block;
@@ -55,13 +136,165 @@ body {
   height: 1.05em;
   margin-left: 2px;
   translate: 0 0.15em;
-  background-color: rgb(125 211 252 / 0.9);
-  animation: caret-blink 1.1s steps(2, start) infinite;
+  background-color: #ff6b00;
+  border-radius: 1px;
+  animation: cursor-glow 1.1s steps(2, start) infinite;
 }
 
-@keyframes caret-blink {
+@keyframes cursor-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 4px rgb(255 107 0 / 0.9),
+      0 0 10px rgb(255 107 0 / 0.45);
+  }
+  50% {
+    box-shadow:
+      0 0 10px rgb(255 183 51 / 1),
+      0 0 22px rgb(255 107 0 / 0.7);
+  }
+}
+
+/*
+ * Punto de "en directo".
+ *
+ * Dos capas: el punto solido y un aro que se expande. El aro se anima con `transform` y
+ * `opacity` unicamente, que es lo unico que el compositor resuelve sin recalcular nada;
+ * el `ping` de Tailwind hace lo mismo pero a duracion fija, y aqui el ritmo va al
+ * compas de la barra de 1.4 s para que el conjunto se lea como un solo latido.
+ */
+.live-dot {
+  position: relative;
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: #ff6b00;
+}
+
+.live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: #ff6b00;
+  animation: live-dot 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes live-dot {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  70%,
+  100% {
+    transform: scale(2.8);
+    opacity: 0;
+  }
+}
+
+/*
+ * Barras del vumetro.
+ *
+ * # Por que `scaleY` y no `height`
+ *
+ * Pedir "subida instantanea y decaimiento suave" con `transition: height` funciona
+ * visualmente, pero `height` no la resuelve el compositor: cada cambio recalcula la
+ * disposicion de la barra y del resto de la fila. Con 48 barras repintandose siete
+ * veces por segundo, eso son 336 relayouts por segundo en el mismo hilo que pinta la
+ * transcripcion.
+ *
+ * `scaleY` parte de una caja de altura fija y la estira. El resultado en pantalla es
+ * identico, y el compositor lo resuelve con una matriz: sin disposicion, sin pintado. El
+ * origen abajo es lo que hace que la barra crezca desde la base y no desde el centro.
+ *
+ * # Por que aqui solo hay una transicion, y es corta
+ *
+ * Una transicion de CSS tiene una duracion y una curva, asi que **no** puede ser
+ * asimetrica: no hay forma de declarar "sube en 80 ms y baja en 420 ms" sobre la misma
+ * propiedad. Dos `transform` en la misma declaracion tampoco lo resuelven: la segunda
+ * sustituye a la primera y solo queda una.
+ *
+ * Por eso la asimetria no vive aqui sino en `src/lib/vu.ts`, que aplica el envolvente
+ * `max(nuevo, anterior * decaimiento)` sobre el historial. Alli la subida es
+ * instantanea porque el valor nuevo gana por comparacion, y la bajada es lenta porque
+ * la barra se queda colgando de la muestra anterior. Lo que queda en CSS es solo
+ * rellenar el hueco entre lecturas, que es de unos 150 ms, asi que 90 ms basta y no
+ * introduce retardo visible.
+ *
+ * La escala la pone el componente en el `style` inline y no una clase, porque depende
+ * del valor: 48 clases distintas por lectura harian que la hoja generase 48
+ * utilidades. Aqui solo vive la transicion y el suelo de respaldo del primer render,
+ * antes de que llegue ninguna muestra.
+ */
+.vu-bar {
+  transform-origin: bottom;
+  transform: scaleY(0.02);
+  transition: transform 90ms ease-out;
+  will-change: transform;
+}
+
+/* Los leds apagados no participan en la animacion: sin cambio de escala no hay nada
+   que interpolar y el navegador los salta entero. */
+.vu-bar--idle {
+  transition: none;
+}
+
+/*
+ * Ecualizador de "hay voz ahora".
+ *
+ * Tres barras que suben y bajen desfasadas entre si, con la duracion del pulso de la
+ * barra de 1.4 s para que el indicador de estado y el vumetro latan a la vez. Se anima
+ * `scaleY` y no `height` por el mismo motivo que el vumetro, y el desfase se consigue
+ * con `animation-delay` en vez de con tres `@keyframes` distintos: el motor de
+ * animaciones solo tiene que interpolar una vez.
+ */
+@keyframes equalizer-wave {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.eq-bar {
+  transform-origin: bottom;
+  animation: equalizer-wave 1.4s ease-in-out infinite;
+}
+
+.eq-bar:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.eq-bar:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+/*
+ * Entrada de un bloque recien cerrado.
+ *
+ * # Por que `translateY` y no `scale`
+ *
+ * Un bloque de texto que aparece escalado se lee como una foto que se acerca. Subirlo
+ * 6 px y dejarlo entrar lo hace salir del sitio de donde vino, que es lo que entiende
+ * el ojo cuando algo se consolida. `transform` en vez de `top`/`margin` porque es lo
+ * unico que no relayout.
+ *
+ * Se declara aqui y no como utilidad de Tailwind porque su nombre (`fade-in`) colisiona
+ * con el `animate-in` de las utilidades de animacion: es un keyframe propio y asi se
+ * queda legible.
+ */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
   to {
-    visibility: hidden;
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -70,7 +303,7 @@ body {
    y `::-webkit-scrollbar` la de WebView2, que es lo que usa Tauri en Windows. */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: rgb(64 64 64) transparent;
+  scrollbar-color: #2a2f38 transparent;
 }
 
 .scrollbar-thin::-webkit-scrollbar {
@@ -82,8 +315,12 @@ body {
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: rgb(64 64 64);
+  background-color: #2a2f38;
   border-radius: 9999px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: #3a414d;
 }
 
 /* El texto de la transcripcion si se puede copiar a mano: contradice el
@@ -93,8 +330,25 @@ body {
   user-select: text;
 }
 
+/*
+ * # Accesibilidad: el sistema entero se apaga si el usuario lo pide.
+ *
+ * No es un extra: `amber-pulse` es una animacion de 7 segundos que no termina nunca, y
+ * una de esas en un angulo de la pantalla es exactamente el patron que dispara
+ * Complaints en usuarios sensibles al movimiento. Apagar las animaciones, y no solo
+ * "suavizarlas", es lo que corresponde. Las de una sola pasada (`fade-in`) se quitan
+ * tambien: con el bloque ya en su sitio final, animar su entrada no aporta nada.
+ */
 @media (prefers-reduced-motion: reduce) {
-  .caret {
+  .caret,
+  .ambient-glow,
+  .live-dot::after,
+  .eq-bar,
+  .vu-bar {
     animation: none;
+  }
+  .vu-bar,
+  .vu-bar--idle {
+    transition: none;
   }
 }

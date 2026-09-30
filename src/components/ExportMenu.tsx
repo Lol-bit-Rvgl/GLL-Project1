@@ -81,19 +81,19 @@ export function ExportMenu({ blocks, interim, language, endMs, onClear }: Export
 
   return (
     <div ref={root} className="flex items-center gap-2">
-      <span className="font-mono text-xs text-neutral-500 tabular-nums">
+      <span className="font-mono text-xs text-slate-ink tabular-nums">
         {words} {words === 1 ? "palabra" : "palabras"}
-        {endMs > 0 && <span className="ml-2 text-neutral-600">{clock(endMs)}</span>}
+        {endMs > 0 && <span className="ml-2 text-slate-ink/70">{clock(endMs)}</span>}
       </span>
 
       <button
         type="button"
         onClick={() => setConfirmingClear(true)}
         disabled={!hasContent}
-        className="rounded-md border border-neutral-800 px-3 py-1.5 text-xs text-neutral-400
-                   transition-colors hover:border-red-900 hover:bg-red-950/40 hover:text-red-300
-                   disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neutral-800
-                   disabled:hover:bg-transparent disabled:hover:text-neutral-400"
+        className="rounded-md border border-neon/15 px-3 py-1.5 text-xs text-slate-ink
+                   transition-colors hover:border-red-900/60 hover:bg-red-950/30 hover:text-red-300
+                   disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neon/15
+                   disabled:hover:bg-transparent disabled:hover:text-slate-ink"
       >
         Limpiar
       </button>
@@ -105,8 +105,8 @@ export function ExportMenu({ blocks, interim, language, endMs, onClear }: Export
           disabled={!hasContent}
           aria-expanded={open}
           aria-haspopup="menu"
-          className="flex items-center gap-1.5 rounded-md border border-neutral-800 px-3 py-1.5
-                     text-xs text-neutral-200 transition-colors hover:border-neutral-700 hover:text-white
+          className="flex items-center gap-1.5 rounded-md border border-neon/20 px-3 py-1.5
+                     text-xs text-snow transition-colors hover:border-neon/60 hover:text-gold
                      disabled:cursor-not-allowed disabled:opacity-40"
         >
           Descargar
@@ -119,7 +119,7 @@ export function ExportMenu({ blocks, interim, language, endMs, onClear }: Export
           <div
             role="menu"
             className="absolute right-0 z-20 mt-1 w-60 overflow-hidden rounded-lg
-                       border border-neutral-800 bg-neutral-900 shadow-2xl"
+                       border border-neon/20 bg-raised shadow-2xl"
           >
             {FORMATS.map((format) => {
               // TXT si puede llevar el parcial abierto; Markdown y SRT necesitan
@@ -133,11 +133,11 @@ export function ExportMenu({ blocks, interim, language, endMs, onClear }: Export
                   disabled={disabled}
                   onClick={() => onExport(format.id)}
                   className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left
-                             transition-colors hover:bg-neutral-800
+                             transition-colors hover:bg-neon/10
                              disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                 >
-                  <span className="text-xs text-neutral-100">{format.label}</span>
-                  <span className="text-[10px] text-neutral-500">{format.hint}</span>
+                  <span className="text-xs text-snow">{format.label}</span>
+                  <span className="text-[10px] text-slate-ink">{format.hint}</span>
                 </button>
               );
             })}
@@ -178,7 +178,7 @@ function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-6"
+      className="fixed inset-0 z-30 flex items-center justify-center bg-obsidian/80 p-6"
       // El clic en el fondo cierra; el interior para que no. `onClick` con
       // `stopPropagation` es mas simple que comparar el target en cada rama.
       onClick={onCancel}
@@ -188,12 +188,12 @@ function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="limpiar-titulo"
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-sm rounded-xl border border-neutral-800 bg-neutral-900 p-5 shadow-2xl"
+        className="w-full max-w-sm rounded-xl border border-neon/20 bg-panel p-5 shadow-2xl"
       >
-        <h2 id="limpiar-titulo" className="text-sm font-medium text-neutral-100">
+        <h2 id="limpiar-titulo" className="text-sm font-medium text-snow">
           Limpiar la transcripcion
         </h2>
-        <p className="mt-2 text-xs leading-5 text-neutral-400">
+        <p className="mt-2 text-xs leading-5 text-slate-ink">
           Se borra todo el texto de la sesion y lo que habia guardado en el navegador.
           Esto no se puede deshacer: descarga antes lo que te interese.
         </p>
@@ -201,8 +201,8 @@ function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-md border border-neutral-800 px-3 py-1.5 text-xs text-neutral-300
-                       transition-colors hover:border-neutral-700 hover:text-white"
+            className="rounded-md border border-neon/20 px-3 py-1.5 text-xs text-snow
+                       transition-colors hover:border-neon/50 hover:text-gold"
           >
             Cancelar
           </button>

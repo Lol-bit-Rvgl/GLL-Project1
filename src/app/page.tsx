@@ -25,10 +25,12 @@ import { listen } from "@tauri-apps/api/event";
 
 import { ControlBar } from "@/components/ControlBar";
 import { ExportMenu } from "@/components/ExportMenu";
+import { DockedPlayer } from "@/components/player/DockedPlayer";
 import { TranscriptStream } from "@/components/TranscriptStream";
 import { VuMeter } from "@/components/VuMeter";
 import { bytes } from "@/lib/format";
 import { useTranscript } from "@/lib/useTranscript";
+import { useDuckWhileTranscribing } from "@/lib/player/useMusicPlayer";
 import { EVENTS } from "@/lib/types";
 import type {
   AudioSource,
@@ -57,6 +59,11 @@ export default function Home() {
   const [source, setSource] = useState<AudioSource>("loopback");
   const [language, setLanguage] = useState<Language>("auto");
   const [capturing, setCapturing] = useState(false);
+  // Activado por defecto, y es una decision: con loopback la musica entra en la
+  // transcripcion, y un historial lleno de letras ajenas es justo lo que la app
+  // promete no hacer. El fallo en sentido contrario -que la musica este un momento
+  // mas baja- se ve en el control de volumen, que se pinta en ambar mientras dura.
+  const [duckMusic, setDuckMusic] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
@@ -140,6 +147,10 @@ export default function Home() {
 
   const engineLive = status?.engine.running === true;
 
+  // Va en la pagina y no en el reproductor porque la regla es de la transcripcion, no
+  // del audio: depende de que el worker este vivo, que es un dato del backend.
+  useDuckWhileTranscribing(engineLive, duckMusic);
+
   const onToggle = () =>
     run(async () => {
       if (engineLive) {
@@ -199,7 +210,11 @@ export default function Home() {
       : "reposo";
 
   return (
-    <main className="flex h-dvh flex-col overflow-hidden bg-neutral-950 text-neutral-100">
+    // `relative` para que el halo de fondo quede detras del contenido, y el halo como
+    // hermano en vez de fondo del `main`: el `main` es opaco y taparia su propio
+    // gradiente.
+    <main className="relative flex h-dvh flex-col overflow-hidden bg-obsidian text-snow">
+      <div className="ambient-glow" aria-hidden="true" />
       <ControlBar
         phase={phase}
         source={source}
@@ -209,10 +224,12 @@ export default function Home() {
         modelReady={modelReady}
         downloading={downloading}
         speaking={transcript.speaking}
+        duckMusic={duckMusic}
         onToggle={onToggle}
         onSourceChange={onSourceChange}
         onLanguageChange={onLanguageChange}
         onDownloadModel={onDownload}
+        onDuckMusicChange={setDuckMusic}
       />
 
       {error && (
@@ -227,7 +244,7 @@ export default function Home() {
       {engine && !engine.real_inference && (
         <p
           role="status"
-          className="border-b border-amber-900/60 bg-amber-950/20 px-6 py-2 text-xs text-amber-300"
+          className="border-b border-neon/20 bg-neon/[0.07] px-6 py-2 text-xs text-ember"
         >
           {engine.detail}. No se transcribe de verdad hasta que el runtime este
           desplegado.
@@ -235,7 +252,7 @@ export default function Home() {
       )}
 
       {downloading && progress && (
-        <div className="border-b border-neutral-800 px-6 py-2">
+        <div className="border-b border-neon/12 px-6 py-2">
           <DownloadBar progress={progress} />
         </div>
       )}
@@ -250,7 +267,7 @@ export default function Home() {
         capturing={capturing}
       />
 
-      <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-800 px-6 py-2.5">
+      <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-neon/12 bg-panel/60 px-6 py-2.5 backdrop-blur">
         <VuMeter
           active={capturing}
           noiseFloorDb={engine?.stats.noise_floor_db ?? -90}
@@ -263,6 +280,8 @@ export default function Home() {
           onClear={transcript.clear}
         />
       </footer>
+
+      <DockedPlayer source={source} capturing={capturing} />
     </main>
   );
 }
@@ -274,18 +293,22 @@ function DownloadBar({ progress }: { progress: DownloadProgress }) {
   return (
     <div className="flex items-center gap-3">
       <div
-        className="h-1 flex-1 overflow-hidden rounded-full bg-neutral-800"
+        className="h-1 flex-1 overflow-hidden rounded-full bg-obsidian"
         role="progressbar"
         aria-valuenow={Math.round(percent)}
         aria-valuemin={0}
         aria-valuemax={100}
       >
+        {/* Escala en vez de ancho, como el resto de barras del panel: durante una
+            descarga el ancho cambia muchas veces por segundo y relayout es lo que
+            mas se nota en un portatil. */}
         <div
-          className="h-full rounded-full bg-sky-500 transition-[width] duration-200"
-          style={{ width: `${percent}%` }}
+          className="h-full w-full origin-left rounded-full bg-gradient-to-r from-neon to-flare
+                     transition-transform duration-200"
+          style={{ transform: `scaleX(${percent / 100})` }}
         />
       </div>
-      <span className="font-mono text-[10px] text-neutral-500 tabular-nums">
+      <span className="font-mono text-[10px] text-slate-ink tabular-nums">
         {bytes(progress.downloaded)}
         {progress.total !== null && ` de ${bytes(progress.total)}`}
         {" · "}

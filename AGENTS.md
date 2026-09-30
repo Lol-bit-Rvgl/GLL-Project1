@@ -162,9 +162,89 @@ incumple. No sonitizedas para hacerlas pasar:
   El autoscroll usa `stickToBottom` como dependencia del `useLayoutEffect` en vez de un `ref`
   espejo, que ademas era la logica correcta.
 
-`globals.css` es **dark por defecto**, sin `prefers-color-scheme`. La version anterior conmutaba por
-el sistema y dejaba texto casi blanco sobre blanco, porque los componentes ya traian clases
-`text-neutral-*` pensadas para fondo oscuro.
+## El tema: `src/app/globals.css`
+
+Dark Obsidian & Neon Amber, **dark por defecto** y sin `prefers-color-scheme`. La version anterior
+conmutaba por el sistema y dejaba texto casi blanco sobre blanco, porque los componentes ya traian
+clases `text-neutral-*` pensadas para fondo oscuro.
+
+Los tokens de color estan en un `@theme inline`: superficies (`obsidian`, `panel`, `raised`), acentos
+(`neon`, `flare`, `gold`), texto (`snow`, `slate-ink`, `ember`) y `olive` para el vumetro. Los nombres
+existen para que un sitio no escriba `amber-500` y otro `orange-600` pensando que son lo mismo.
+`inline` significa que Tailwind no emite la variable: mete el hex en cada utilidad que la usa. Un
+token mal escrito no da error, simplemente no genera utilidad y la pantalla se queda sin color en
+silencio; por eso `D:\Temp\opencode\check-css.js` verifica la hoja generada y no el source.
+
+Cuatro reglas del tema que no se pueden deshacer, cada una con su motivo:
+
+- **Lo que se anima es `transform` u `opacity`, nunca `height`, `width`, `top` ni `inset`.** El STT y
+  la transcripcion ya compiten por el hilo principal; cualquier propiedad de disposicion en movimiento
+  relayouta por su cuenta. Las barras del vumetro, el relleno del scrubber, el del volumen y el de la
+  barra de descarga escalan con `scaleX`/`scaleY` en vez de medirse.
+- **La asimetria del vumetro (subida instantanea, caida lenta) esta en `src/lib/vu.ts`, no en CSS.**
+  Una transicion de CSS tiene una sola duracion y una sola curva, asi que **no puede** ser asimetrica, y
+  poner dos `transform` en la misma declaracion no lo arregla: la segunda sustituye a la primera. El
+  envolvente `max(nuevo, anterior * DECAY)` si lo puede, y es puro, asi que se ejercita con `node`.
+- **`prefers-reduced-motion: reduce` apaga las animaciones continuas, no las suaviza.** `amber-pulse` y
+  `equalizer-wave` son infinitas y en un angulo de la pantalla son justo el patron que molesta. El giro
+  de la caratula se declara con `motion-safe:`, que ya lo envuelve solo. Las de una pasada (`fade-in`)
+  se quitan tambien: con el bloque ya en su sitio final, animar su entrada no aporta nada.
+- **Sin dependencias de animacion.** Solo Tailwind v4, CSS nativo y SVG en linea. Ni Framer Motion ni
+  una libreria de iconos para dos triangulos.
+
+`D:\Temp\opencode\check-css.js` comprueba la hoja de `.next/static`: que esten todos los tokens con su
+hex, los cinco keyframes, el bloque de reduced motion completo, y que no haya ninguna transicion de
+disposicion. El giro de la caratula se comprueba aparte, porque `motion-safe:` lo envuelve en su propia
+media query y no se ve en el mismo sitio que las nuestras.
+
+## El reproductor: `src/lib/player/`
+
+Cuatro ficheros, y la separacion es deliberada: `audioPlayer.ts` es el motor y no sabe nada de
+React; `useMusicPlayer.ts` es el enlace; `types.ts` el contrato; `metadata.ts` un parser a mano.
+Los componentes de `src/components/player/` **no importan el motor**, usan `useMusicControls`.
+
+Decisiones que no se pueden deshacer sin motivo:
+
+- **Un `HTMLAudioElement`, no Web Audio API.** Un `AudioContext` con `ScriptProcessorNode` o
+  `AudioWorklet` pasa cada bloque de samples por el hilo principal, que es el mismo que renderiza
+  la transcripcion. El `<audio>` deja el decodificador en el pipeline de multimedia del webview.
+- **Singleton con estado fuera de React, notificado por `useSyncExternalStore`.** La posicion avanza
+  cuatro veces por segundo; si estuviera en un `useState` de la pagina, se re-renderizaria el
+  historial entero cuatro veces por segundo mientras se transcribe. Por eso hay dos hooks:
+  `useMusicPlayer` (estado entero, solo el reproductor) y `useMusicPlaying` (booleano, para lo que
+  solo necesita saber si suena).
+- **`volume` es siempre el del usuario; la bajada por transcripcion es `isDucked`.** La primera
+  version guardaba el volumen de antes de bajarlo y lo restauraba, y si el usuario movia el slider
+  a media transcripcion se pisaban: al terminar la musica volvia a un volumen que nadie habia
+  elegido. `applyVolume` decide, asi que las dos cosas no pueden entrar en conflicto.
+- **El aleatorio se invalida, no se reconstruye a mano.** `setShuffle` y `reindex` dejan `order`
+  vacio y que `buildOrder` lo rehaga poniendo la pista en curso la primera. La version anterior
+  metia solo `[indiceActual]` en el orden, y con eso `nextIndex` se salia por el final y
+  **"siguiente" paraba la musica**. Hay un caso en el banco que lo cubre.
+- **Al quitar o vaciar la cola, `detach()` antes de `release()`.** Revocar el `objectURL` que tiene
+  el elemento puesto produce un error de red espurio; `detach()` (pausar, quitar `src`, `load()`)
+  es lo que suelta el decodificador nativo.
+- **Reordenar con eventos de puntero, no con drag and drop de HTML5.** El navegador no distingue
+  el arrastre de una fila del arrastre de un fichero, y con los dos montados soltar un `.mp3`
+  encima de la fila intentaria moverla. Ademas hay botones de subir y bajar al lado.
+- **`DropZone` escucha a `window`, y su overlay va en un portal.** El texto de la interfaz dice
+  "suelta ficheros en la ventana", y con los eventos en un `<div>` que envuelve la barra inferior
+  eso solo era cierto en los ultimos 60 px de la pantalla. El overlay va con `createPortal` a
+  `document.body` porque cualquier ancestro con `transform`, `filter` o `backdrop-filter` convierte
+  su `position: fixed` en relativo a ese ancestro, y el reproductor tiene `backdrop-blur` en sitios.
+  El portal solo se monta con `hovering`, y `hovering` solo puede venir de un evento del navegador,
+  asi que `document` no existe aun en el prerender y el primer render del cliente coincide con el del
+  servidor: no hace falta estado de "montado" ni IIFE asincrono.
+- **El parser de etiquetas es defensivo y sin dependencias.** `readTags` nunca lanza: cualquier
+  excepcion es "sin metadatos", porque un reproductor que se cae al abrir una cancion es inservible
+  y uno que muestra `cancion.mp3` sin caratula es usable. Ojo con el byte de codificacion de
+  `APIC`, que va en la posicion 0: el byte de tipo de imagen va **despues** del MIME y no es el de
+  codificacion.
+
+Con loopback la musica del reproductor entra en la transcripcion, y **ponerse auriculares no lo
+evita**: el loopback abre el endpoint de render con `AUDCLNT_STREAMFLAGS_LOOPBACK`, que es un grifo
+digital sobre la mezcla antes del altavoz. El aviso de `captureConflict` dice exactamente eso, y sale
+solo cuando hay captura activa y algo sonando.
 
 # Pendiente conocido
 
@@ -188,10 +268,14 @@ cargo check --all-targets --manifest-path src-tauri\Cargo.toml
 cargo test --manifest-path src-tauri\Cargo.toml                 # 101 tests
 ```
 
-No hay runner de tests en el frontend y **no se anade uno**: `reduce` y los exportadores se
-verifican compilando `src/lib` con `npx tsc --outDir` a un directorio temporal y ejecutando un banco
-de casos con `node`. La logica pura esta aislada en `src/lib/` justamente para que eso sea posible sin
-arrastrar React ni Tauri.
+No hay runner de tests en el frontend y **no se anade uno**: `reduce`, los exportadores y el motor
+del reproductor se verifican compilando `src/lib` con `npx tsc --outDir` a un directorio temporal y
+ejecutando un banco de casos con `node`. La logica pura esta aislada en `src/lib/` justamente para
+que eso sea posible sin arrastrar React ni Tauri. El banco del reproductor necesita stubs de
+`Audio`, `URL.createObjectURL` y `localStorage`, porque el motor solo crea el elemento en el primer
+comando; el `FakeAudio` tiene que disparar `play` y `pause`, que es lo que el motor escucha. El del
+vumetro (`runvu.js`) es el que mas ha encontrado: la asimetria del envolvente no es comprobable viendo
+la barra, porque un `max` mal puesto tambien "parece" funcionar.
 
 `cargo test` sin el runtime desplegado omite 15 tests de inferencia real (7 del sys, 8 de
 streaming) y pasa los demas. Con `scripts\deploy-whisper.ps1` ejecutado, pasan todos.
