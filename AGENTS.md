@@ -91,15 +91,80 @@ Tres cosas que costaron sangre y no deben romperse:
 
 # Streaming: la UI concatena
 
-`page.tsx` hace `setSegments(prev => [...prev, ...])`: cada evento se **anya**, no se sustituye. Por
-eso `WhisperEngine` devuelve solo el **incremento** respecto a lo ya emitido, calculado por
-palabras completas. Devolver la ventana entera repetiria la frase en pantalla. La UI no tiene forma
-de decir "borra lo anterior", asi que una palabra que whisper revierte se queda.
+`WhisperEngine` devuelve solo el **incremento** respecto a lo ya emitido, calculado por palabras
+completas, porque la UI concatena en vez de sustituir. Devolver la ventana entera repetiria la frase
+en pantalla. La UI no tiene forma de decir "borra lo anterior", asi que una palabra que whisper
+revierte se queda.
 
 Los primeros parciales son **ruidosos por naturaleza**: con 1 s de audio whisper alucina
 (`[INAUDIBLE]`, "you are country"). El final, con el utterance completo, es fiable. Se eligio
 parciales rapidos y ruidosos antes que parciales utiles a los 2-3 s. Ver el doc de
 `whisper_engine.rs` con las salidas medidas.
+
+## El reducer de la UI: `src/lib/transcript.ts`
+
+`page.tsx` ya no concatena segmentos en una lista plana. `reduce(estado, segmento)` mantiene **dos**
+cosas separadas:
+
+- `blocks`: frases ya cerradas (`is_final`). Inmutables. Es lo que se exporta y lo que persiste.
+- `interim`: el acumulado del segmento en curso. Se **acumula** con cada parcial, no se sustituye.
+
+Reglas que no se deben romper, cada una con un motivo:
+
+- **El final es una cola, no la frase.** `WhisperEngine` lo emite contra la referencia del ultimo
+  parcial, asi que el texto del bloque es `interim + final`. Si se descarta el `interim`, se pierde
+  la cabeza de la frase; si se concatenan a pelo, se duplica.
+- **`interim.start_ms` lo fija el PRIMER parcial.** Los siguientes llegan con `start_ms` mayor
+  porque la ventana ha crecido hacia delante; tomarlo cada vez desplazaria la frase a la derecha
+  segun avanza.
+- **Un final VACIO descarta lo acumulado.** Es la unica regla que delega texto, y es deliberada: si
+  el final no anade ninguna palabra, la ventana completa no produjo nada, y lo que hubiera en el
+  parcial era alucinacion. Persistir `[INAUDIBLE]` en el historial y en el SRT seria el problema que
+  la app promete resolver. Se acepta el riesgo opuesto (un final vacio por averia se come la frase):
+  perder texto es reversible, fabricar una frase exportada no.
+- **`block.id` sale del ultimo id, no de `Date.now()` ni de un contador global.** El estado
+  serializado y el recien montado tienen que generar la misma secuencia de claves de React.
+
+# Frontend
+
+Sin dependencias nuevas: React 19, Next 16 y Tailwind 4, que ya estaban. Los iconos son SVG en
+linea; no hay libreria de iconos para dos triangulos.
+
+- `src/lib/types.ts`: espejo a mano de las estructuras `Serialize` de Rust. **Los nombres van en
+  snake_case** porque serde serializa el campo tal cual esta declarado y estos `derive` no llevan
+  `rename_all`. El reparto es irregular y por eso el fichero esta comentado campo a campo:
+  `TranscriptionSegment`, `WorkerStats`, `EngineStatus`, `ModelInfo` y `ModelStatus` van en
+  snake_case; `CaptureStatus` y `AudioDevicesInfo` si llevan `rename_all = "camelCase"` y mandan
+  `inputSampleRate` / `defaultInput`. Si un dia se quiere una sola convencion, se pone el
+  `rename_all` en el `derive` de Rust y se actualiza este espejo: **no** se traduce en la UI, porque
+  entonces el contrato de los eventos dejaria de coincidir con el que ven los tests de Rust.
+- `src/lib/transcript.ts`: el reducer. Puro y sin efectos, a proposito: se puede ejercitar entero sin
+  montar React.
+- `src/lib/useTranscript.ts`: eventos de Tauri, persistencia en `localStorage` (cada 5 s) y estado
+  pegado al scroll. Sondeo de `get_stt_status` cada 2 s porque `stt-engine-status` **solo** se emite
+  al arrancar y al parar: sin el sondeo el piso de ruido y los contadores se quedan congelados en el
+  valor del arranque durante toda la sesion.
+- `src/lib/useAudioLevel.ts`: vumetro aislado. Lee `get_audio_level` cada 100 ms a un `ref` y pinta
+  cada 150 ms; va aparte del texto porque si no cada lectura re-renderizaria el historial entero.
+- `src/lib/export.ts`: TXT, Markdown y SRT. TXT incluye el segmento en curso; MD y SRT no, porque
+  un SRT con una frase a medias no significa nada.
+
+## Reglas de React que este repo ya no puede violar
+
+`eslint-config-next` 16 trae las reglas de React Compiler en modo error, y `npm run lint` falla si se
+incumple. No sonitizedas para hacerlas pasar:
+
+- **`react-hooks/set-state-in-effect`**: nada de `setState` sincrono en el cuerpo de un efecto. La
+  carga inicial y la lectura de `localStorage` van dentro de un IIFE asincrono. Apagado el vumetro no
+  hace `setLevel(0)`: se devuelve `SILENT` desde el hook.
+- **`react-hooks/refs`**: nada de escribir un `ref` durante el render, ni siquiera
+  `ref.current = valor`. El espejo de estado del intervalo de guardado se actualiza en un efecto.
+  El autoscroll usa `stickToBottom` como dependencia del `useLayoutEffect` en vez de un `ref`
+  espejo, que ademas era la logica correcta.
+
+`globals.css` es **dark por defecto**, sin `prefers-color-scheme`. La version anterior conmutaba por
+el sistema y dejaba texto casi blanco sobre blanco, porque los componentes ya traian clases
+`text-neutral-*` pensadas para fondo oscuro.
 
 # Pendiente conocido
 
@@ -109,15 +174,24 @@ esta desplegado, `build_engine` devuelve un `WhisperEngine` con `ready = false` 
 daria una transcripcion que parece funcionar y no transcribe. `StubEngine` sigue existiendo para
 los tests del pipeline, que lo inyectan por `SttWorker::start`.
 
+La UI no decide si el modelo sirve: usa `ModelInfo.installed && size_ok && (expected_sha256 === null
+|| verified)`, que es el mismo criterio que `ModelInfo::is_usable` en Rust. No reimplementar aqui la
+comparacion de hashes.
+
 # Comandos de verificacion
 
 ```powershell
-cargo fmt --all --check        # 2 espacios, ancho 100
-cargo check --all-targets
-cargo test                     # 101 tests
-npm run lint
+npm run lint                     # incluye las reglas de React Compiler, en modo error
 npm run build
+cargo fmt --all --check --manifest-path src-tauri\Cargo.toml   # 2 espacios, ancho 100
+cargo check --all-targets --manifest-path src-tauri\Cargo.toml
+cargo test --manifest-path src-tauri\Cargo.toml                 # 101 tests
 ```
+
+No hay runner de tests en el frontend y **no se anade uno**: `reduce` y los exportadores se
+verifican compilando `src/lib` con `npx tsc --outDir` a un directorio temporal y ejecutando un banco
+de casos con `node`. La logica pura esta aislada en `src/lib/` justamente para que eso sea posible sin
+arrastrar React ni Tauri.
 
 `cargo test` sin el runtime desplegado omite 15 tests de inferencia real (7 del sys, 8 de
 streaming) y pasa los demas. Con `scripts\deploy-whisper.ps1` ejecutado, pasan todos.

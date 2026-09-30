@@ -1,8 +1,19 @@
 @import "tailwindcss";
 
+/*
+ * Dark por defecto, sin `prefers-color-scheme`.
+ *
+ * La version anterior cambiaba de tema segun el sistema con una media query, y el
+ * resultado era una app con dos identidades: con el tema claro, el texto de la
+ * transcripcion iba casi blanco sobre blanco, porque los componentes de texto ya
+ * traian clases `text-neutral-*` pensadas para fondo oscuro. Una app de captura de
+ * audio se usa de noche, con el brillo al minimo: un solo tema oscuro es la opcion
+ * honesta, sin rama que mantener.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0a0a0a;
+  --foreground: #e5e5e5;
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -12,15 +23,78 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  /* El texto entra palabra a palabra: seleccionar el canal entero por accidente hace
+     que un arrastre rapido dejara el texto resaltado y el usuario no pudiera
+     seguir leyendo limpio. El menu de exportacion sigue siendo seleccionable. */
+  -webkit-user-select: none;
+  user-select: none;
+  /* `dvh` y no `vh`: con los controles de la ventana de Windows, `vh` incluye la
+     barra de tareas y el pie se cortaba en pantallas pequenas. */
+  overflow: hidden;
+}
+
+/*
+ * Cursor de escritura al final del texto en curso.
+ *
+ * Es un elemento con `animate-pulse` en vez de `caret-blink` de Tailwind porque
+ * este necesita una fuente monoespaciada, y el texto en curso va en la fuente de
+ * cuerpo. Un bloque vacio con fondo se ve bien con cualquier fuente.
+ */
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  translate: 0 0.15em;
+  background-color: rgb(125 211 252 / 0.9);
+  animation: caret-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes caret-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* Barra de scroll fina y discreta. El canal de texto puede tener miles de lineas y
+   una barra de 16 px comiendo el ancho se nota. `scrollbar-color` es la via estandar
+   y `::-webkit-scrollbar` la de WebView2, que es lo que usa Tauri en Windows. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(64 64 64) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgb(64 64 64);
+  border-radius: 9999px;
+}
+
+/* El texto de la transcripcion si se puede copiar a mano: contradice el
+   `user-select: none` global, y es justo lo que se quiere en un bloque de texto. */
+.scrollbar-thin p {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
 }
