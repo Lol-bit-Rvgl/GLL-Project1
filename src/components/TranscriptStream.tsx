@@ -38,7 +38,7 @@
  * resplandor del que pide el diseno, y ademas pagarian el pintado dos veces.
  */
 
-import { memo, useCallback, useLayoutEffect, useRef } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import { clock } from "@/lib/format";
 import type { Block } from "@/lib/transcript";
@@ -73,6 +73,29 @@ function TranscriptStreamImpl({
 }: TranscriptStreamProps) {
   const scroller = useRef<HTMLDivElement>(null);
 
+  /*
+   * Frases que ya estaban escritas cuando el usuario se solto del final.
+   *
+   * `null` significa "pegado al final", o sea que no hay nada sin leer. Al soltarse se
+   * fija al numero de bloques que hay en ese instante, y a partir de ahi el contador es
+   * `blocks.length - anchor`, que crece solo con laProps.
+   *
+   * # Por que un ancla y no un contador
+   *
+   * Un contador de "nuevas" tendria que incrementarse cuando llega un bloque, y eso solo
+   * se puede hacer desde un efecto sobre las props. Aqui el estado no cuenta: guarda el
+   * punto de partida, y la cuenta se deriva durante el render. Consecuencia practica:
+   * ningun `setState` vive en un efecto y el boton no necesita un temporizador ni una
+   * bandera para saber si el numero es real.
+   *
+   * # Por que se fija al soltarse y no en cada scroll
+   *
+   * Si el ancla se moviera en cada evento de scroll, subir y bajar un poco lo pondria a
+   * cero y el contador volveria a empezar. Solo se mueve al cruzar el umbral, que es lo
+   * que el usuario percibe como "me he soltado".
+   */
+  const [anchor, setAnchor] = useState<number | null>(null);
+
   // `useLayoutEffect` y no `useEffect`: el scroll tiene que estar puesto ANTES de
   // que el navegador pinte, o se ve un salto desde arriba en cada frase nueva. Con
   // `auto` y no `smooth`, porque con texto cada 500 ms la animacion se solaparia
@@ -89,6 +112,18 @@ function TranscriptStreamImpl({
     if (node === null) return;
     const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight <= BOTTOM_SLACK_PX;
     onStickChange(atBottom);
+    const count = blocks.length;
+    setAnchor((prev) => {
+      if (atBottom) return null;
+      return prev === null ? count : prev;
+    });
+  }, [blocks.length, onStickChange]);
+
+  const unread = anchor === null ? 0 : Math.max(0, blocks.length - anchor);
+
+  const jumpToPresent = useCallback(() => {
+    setAnchor(null);
+    onStickChange(true);
   }, [onStickChange]);
 
   const empty = blocks.length === 0 && interim.trim() === "";
@@ -107,7 +142,7 @@ function TranscriptStreamImpl({
             {blocks.map((block) => (
               <div
                 key={block.id}
-                className="animate-[fade-in_260ms_ease-out] border-l-2 border-neon/40 pl-4
+                className="motion-safe:animate-[slide-up-fade_320ms_ease-out] border-l-2 border-neon/40 pl-4
                            transition-colors duration-500 hover:border-neon/70"
               >
                 <p className="mb-3 text-[1.0625rem] leading-7 text-snow">
@@ -126,7 +161,11 @@ function TranscriptStreamImpl({
             ))}
             {speaking && (
               <div className="border-l-2 border-neon/70 pl-4">
-                <p className="text-[1.0625rem] leading-7 text-ember">
+                {/* El parcial va en `ember` a peso medio: es texto provisional, pero es la
+                    unica version que hay de esa frase mientras whisper la cierra, asi que
+                    no puede verse como un hueco. El cursor `caret` ya dice que esta en
+                    curso; el color solo separa lo cerrado de lo abierto. */}
+                <p className="text-[1.0625rem] font-medium leading-7 text-ember">
                   {interim.trim() === "" ? (
                     <span className="caret" />
                   ) : (
@@ -142,18 +181,40 @@ function TranscriptStreamImpl({
         )}
       </div>
 
-      {/* El boton solo aparece cuando el usuario se ha soltado del final. Flotante y
-          pequeno, para no comer altura del canal de texto. */}
+      {/*
+        El boton solo aparece cuando el usuario se ha soltado del final, y va abajo a la
+        derecha y en circulo. Antes estaba centrado, y tapaba la ultima frase justo
+        cuando hay algo nuevo que leer; en una esquina no pisa nada. Y el contador va en
+        una insignia encima, no dentro del boton: el icono sigue siendo un icono y el
+        numero no le cambia la forma al pasar de 1 a 100.
+      */}
       {!stickToBottom && !empty && (
         <button
           type="button"
-          onClick={() => onStickChange(true)}
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-neon/30
-                     bg-panel/90 px-3 py-1.5 text-xs text-snow shadow-lg
-                     backdrop-blur transition-colors hover:border-neon/70 hover:text-white
+          onClick={jumpToPresent}
+          aria-label={
+            unread > 0 ? `Ir al presente, ${unread} frases sin leer` : "Ir al presente"
+          }
+          title={unread > 0 ? `${unread} frases sin leer` : "Ir al presente"}
+          className="motion-safe:animate-[slide-up-fade_260ms_ease-out] absolute bottom-4 right-6
+                     flex h-10 w-10 items-center justify-center rounded-full border border-neon/40
+                     bg-panel/90 text-snow shadow-[0_4px_20px_rgba(0,0,0,0.5)] backdrop-blur
+                     transition-colors hover:border-neon hover:text-white
                      focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neon"
         >
-          Bajar al final
+          <svg viewBox="0 0 16 16" className="h-4 w-4 fill-current" aria-hidden="true">
+            <path d="M8 2.5v8.2l3.4-3.4 1.1 1.1L8 12.8 3.5 8.4l1.1-1.1L8 10.7V2.5z" />
+          </svg>
+          {unread > 0 && (
+            <span
+              className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-neon px-1
+                         font-mono text-[10px] font-bold leading-[18px] text-obsidian
+                         tabular-nums ring-2 ring-obsidian"
+              aria-hidden="true"
+            >
+              {unread > 99 ? "99+" : unread}
+            </span>
+          )}
         </button>
       )}
     </section>

@@ -237,6 +237,216 @@ function testTimestampSinModificadorDeOpacidad() {
 }
 
 // --------------------------------------------------------------------------
+// 7. El indicador del conmutador de fuente se mueve con `transform`.
+//
+// El bug: cambiar el indicador deslizante a `transition-[left]` con `left-full` en el
+// segundo estado. Se ve bien en reposo, porque el estado inicial no se anima; el coste
+// aparece al cambiar de fuente, que es cuando recalcula la composicion del encabezado
+// entero en cada frame. Y el encabezado esta en la misma pagina que la transcripcion y el
+// vumetro, que ya compiten por el hilo principal.
+//
+// Se comprueba que la transicion sea de `transform` y que no se anime ninguna propiedad
+// de disposicion. La lista negra es nominal a proposito: `left-0.5` es la posicion inicial
+// legitima y no puede prohibirse.
+// --------------------------------------------------------------------------
+function testElIndicadorSeMueveConTransform() {
+  const rel = "src/components/ControlBar.tsx";
+  const texto = fuente(rel);
+
+  // El indicador es el `span` con la posicion absoluta y el ancho de la mitad.
+  const marca = texto.match(/className=\{`([^`]*absolute inset-y-0\.5[^`]*)`\}/u);
+  assert.ok(
+    marca,
+    "no se encuentra el indicador del conmutador en " + rel +
+      " (se busca el span con `absolute inset-y-0.5` y ancho de la mitad)",
+  );
+
+  assert.ok(
+    marca[1].includes("transition-transform"),
+    "el indicador del conmutador no transiciona `transform` (" + marca[1].trim() +
+      "). Sin eso, el deslizamiento no se anima de forma compuesta.",
+  );
+
+  // Ninguna propiedad de disposicion, y ninguna transicion global o arbitraria: si alguien
+  // escribe `transition-all` la comprobacion de arriba pasa y el bug vuelve.
+  const disposicion = marca[1].match(/transition-\[(?:left|right|top|inset|width|all)[^\]]*\]/u);
+  assert.ok(
+    disposicion === null,
+    "el indicador del conmutador vuelve a animar una propiedad de disposicion (" +
+      disposicion?.[0] + "). Relayouta el encabezado entero en cada frame.",
+  );
+  assert.ok(
+    !/(^|\s)transition-all(\s|$)/u.test(marca[1]),
+    "el indicador del conmutador usa `transition-all` (" + marca[1].trim() +
+      "): deja pasar a `left` sin que este test lo note.",
+  );
+
+  // Y tiene que haber dos posiciones de verdad, no una sola con la animacion puesta.
+  assert.ok(
+    /translate-x-\[calc\(100%\+/u.test(texto),
+    "el conmutador no tiene la segunda posición del indicador en " + rel,
+  );
+}
+
+// --------------------------------------------------------------------------
+// 8. La entrada del bloque va con `motion-safe`.
+//
+// El bug: quitar el `motion-safe:` de `motion-safe:animate-[slide-up-fade...]`. Con la
+// preferencia de menos movimiento activa, cada frase cerrada entra 12 px igual: en un
+// canal de texto que se actualiza cada medio segundo, media pantalla de scroll moviéndose
+// sola es justo el patron que esa preferencia existe para desactivar.
+//
+// `fade-in` y `slide-up-fade` se distinguen por el prefijo, no por el contenido, asi que
+// la comprobacion tiene que mirar el `motion-safe:` y no solo el nombre de la animacion.
+// --------------------------------------------------------------------------
+function testLaEntradaDelBloqueRespetaReducedMotion() {
+  const rel = "src/components/TranscriptStream.tsx";
+  const texto = fuente(rel);
+
+  const animaciones = [...texto.matchAll(/(\S*)animate-\[slide-up-fade_/gu)].map((m) => m[1]);
+  assert.ok(
+    animaciones.length > 0,
+    "no se encuentra ninguna entrada `slide-up-fade` en " + rel +
+      ", asi que los bloques ya no entran animada",
+  );
+  for (const prefijo of animaciones) {
+    assert.ok(
+      prefijo.endsWith("motion-safe:"),
+      "una entrada `slide-up-fade` no va envuelta en `motion-safe:` (queda como `" +
+        prefijo + "animate-[slide-up-fade...`). Con menos movimiento pedido, cada frase " +
+        "cerrada sigue entrando 12 px.",
+    );
+  }
+}
+
+// --------------------------------------------------------------------------
+// 9. El contador de frases sin leer se deriva, no se cuenta en un efecto.
+//
+// El bug: reescribir el contador como `useEffect(() => setUnread(blocks.length - visto), [blocks.length])`.
+// Compila, funciona, y `npm run lint` lo pasa... salvo que este repo tiene las reglas del
+// React Compiler en modo error, asi que falla el lint. Y aunque pasara, el `setState` en un
+// efecto pinta el historial entero una vez mas por cada frase.
+//
+// Aqui el estado guarda el ANCLA (el punto donde se solto el usuario) y la cuenta se
+// deriva al renderizar. Por eso el fichero no debe tener ningun `useEffect`: el unico
+// efecto de scroll es un `useLayoutEffect` que escribe `scrollTop`, que no es estado.
+// --------------------------------------------------------------------------
+function testElContadorSeDerivaYNoUsaEfecto() {
+  const rel = "src/components/TranscriptStream.tsx";
+  const texto = fuente(rel);
+
+  assert.ok(
+    !/useEffect\(/u.test(texto),
+    "TranscriptStream ha aparecido un `useEffect` (" + rel + "). El contador de frases " +
+      "sin leer se deriva del ancla durante el render; un efecto aqui solo puede servir " +
+      "para contar, y contar en un efecto es lo que este test existe para impedir.",
+  );
+
+  // La derivacion tiene que estar, no solo la ausencia del efecto: si se borra el
+  // contador entero el fichero sigue sin `useEffect` y el test pasaria sin motivo.
+  assert.ok(
+    /anchor === null \? 0 : Math\.max\(0, blocks\.length - anchor\)/u.test(texto),
+    "no se encuentra la derivacion del contador de frases sin leer en " + rel +
+      ". Se esperaba `anchor === null ? 0 : Math.max(0, blocks.length - anchor)`.",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 10. El dialogo de confirmacion va en un portal.
+//
+// El bug: devolver el dialogo a su sitio, dentro del arbol normal. Sigue siendo
+// `position: fixed`, pero su ancestro -el `footer` de la pagina- tiene `backdrop-blur`, y
+// cualquier ancestro con `backdrop-filter` se convierte en bloque contenedor de los
+// descendientes fijos. El `fixed` deja de medir contra la ventana y mide contra esa franja
+// de 40 px: el fondo opaco cubre solo la barra inferior y el recuadro sale centrado en
+// ella. Es un boton flotando con su sombra y sin modal alrededor.
+//
+// El overlay de `DropZone` tiene el mismo motivo y la misma solucion, y por eso el
+// comentario de `ConfirmDialog` remite a el.
+// --------------------------------------------------------------------------
+function testElDialogoDeConfirmacionVaEnUnPortal() {
+  const rel = "src/components/ExportMenu.tsx";
+  const texto = fuente(rel);
+
+  assert.ok(
+    /import \{ createPortal \} from "react-dom";/u.test(texto),
+    rel + " no importa `createPortal`. Sin el, el dialogo de confirmar queda dentro del " +
+      "`footer`, y su `backdrop-blur` lo convierte en bloque contenedor del `fixed`.",
+  );
+
+  // El `return` de `ConfirmDialog` tiene que ser el portal, no el `<div>`.
+  const cuerpo = texto.slice(texto.indexOf("function ConfirmDialog"));
+  assert.ok(
+    /return createPortal\(/u.test(cuerpo),
+    "ConfirmDialog no devuelve `createPortal(...)`. El `fixed inset-0` se mediria contra " +
+      "el `footer` con `backdrop-blur` y no contra la ventana.",
+  );
+  assert.ok(
+    /document\.body/u.test(cuerpo),
+    "el portal de ConfirmDialog no apunta a `document.body`.",
+  );
+}
+
+// --------------------------------------------------------------------------
+// 11. `fade-in` y `slide-up-fade` son dos keyframes distintos.
+//
+// El bug: copiar `fade-in` sobre `slide-up-fade` al añadir el segundo. Los dos se siguen
+// nombrando donde toca, el CSS compila y no hay ni un error, pero el bloque de texto
+// entra 6 px como un etiqueta cualquiera y el ritmo largo se pierde sin que nada lo
+// note. Un test de nombres no lo veria, asi que se comparan las dos distancias.
+//
+// Tambien se comprueba que solo se animen `transform` y `opacity`: un `top` o un `height`
+// en un keyframe de entrada relayouta la columna entera en cada frase.
+// --------------------------------------------------------------------------
+function testLosDosKeyframesDeEntradaSonDistintos() {
+  const texto = fuente("src/app/globals.css");
+
+  const distancia = (nombre) => {
+    const bloque = texto.match(
+      new RegExp("@keyframes " + nombre + "\\s*\\{([\\s\\S]*?)\\n\\}", "u"),
+    );
+    assert.ok(bloque, "no se encuentra `@keyframes " + nombre + "` en globals.css");
+    const corto = bloque[1].match(/translateY\((\d+)px\)/u);
+    assert.ok(
+      corto !== null,
+      "`@keyframes " + nombre + "` no declara un `translateY` en px. La animacion de " +
+        "entrada se hace con `transform`, no con `top`.",
+    );
+    // Solo se permite `transform` y `opacity` en el bloque. El recorte es `\\n\\s+` y
+    // no `^\\s{2}` porque el CSS indenta con DOS espacios dentro del keyframe y con
+    // CUATRO dentro de `from`/`to`: contando la sangria exacta, las cuatro lineas de
+    // aqui abajo no casaban con nada y el bucle no se ejecutaba nunca. Un test que
+    // recorre una lista vacia pasa siempre, y ademas habria dejado pasar justo el
+    // `top` que este test existe para cazar.
+    const propiedades = [...bloque[1].matchAll(/(?:^|\n)\s+([a-z-]+)\s*:/gu)].map((m) => m[1]);
+    assert.ok(
+      propiedades.length > 0,
+      "`@keyframes " + nombre + "` no tiene ninguna propiedad: el keyframe esta vacio y " +
+        "la animacion no haria nada.",
+    );
+    for (const propiedad of propiedades) {
+      assert.ok(
+        ["opacity", "transform"].includes(propiedad),
+        "`@keyframes " + nombre + "` anima `" + propiedad + "`. Solo se admite " +
+          "`transform` y `opacity`: cualquier propiedad de disposicion relayouta la " +
+          "columna de texto entera en cada bloque.",
+      );
+    }
+    return Number(corto[1]);
+  };
+
+  const corto = distancia("fade-in");
+  const largo = distancia("slide-up-fade");
+
+  assert.ok(
+    largo > corto,
+    "`slide-up-fade` desplaza " + largo + " px y `fade-in` " + corto +
+      " px. El bloque de texto entra mas lejos que un elemento pequeno, y si los dos " +
+      "mueven lo mismo son el mismo keyframe con dos nombres.",
+  );
+}
+
+// --------------------------------------------------------------------------
 // Arranque
 // --------------------------------------------------------------------------
 const tests = [
@@ -246,6 +456,11 @@ const tests = [
   ["la pista tiene ancho para 48 barras", testAnchoDeLaPista],
   ["las barras reparten el ancho con flex-1", testLasBarrasRepartenElAncho],
   ["el timestamp va a opacidad plena", testTimestampSinModificadorDeOpacidad],
+  ["el conmutador de fuente se mueve con transform", testElIndicadorSeMueveConTransform],
+  ["la entrada del bloque va con motion-safe", testLaEntradaDelBloqueRespetaReducedMotion],
+  ["el contador de frases se deriva, no se cuenta en un efecto", testElContadorSeDerivaYNoUsaEfecto],
+  ["el dialogo de confirmar va en un portal", testElDialogoDeConfirmacionVaEnUnPortal],
+  ["fade-in y slide-up-fade son keyframes distintos", testLosDosKeyframesDeEntradaSonDistintos],
 ];
 
 let fallos = 0;

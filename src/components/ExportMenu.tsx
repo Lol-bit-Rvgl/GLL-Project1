@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { download, render, suggestedName, type ExportFormat } from "@/lib/export";
 import type { Block } from "@/lib/transcript";
@@ -70,7 +71,9 @@ export function ExportMenu({ blocks, interim, language, endMs, onClear }: Export
         meta: {
           language,
           durationMs: endMs,
-          exportedAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+          // ISO completo y sin recortar: el formato de la fecha lo pone `dateStamp`, que
+          // necesita la zona local. Recortar aqui devolvia la hora de UTC en la cabecera.
+          exportedAt: new Date().toISOString(),
         },
       });
       download(format, contents, suggestedName());
@@ -118,8 +121,9 @@ export function ExportMenu({ blocks, interim, language, endMs, onClear }: Export
         {open && (
           <div
             role="menu"
-            className="absolute right-0 z-20 mt-1 w-60 overflow-hidden rounded-lg
-                       border border-neon/20 bg-raised shadow-2xl"
+            className="absolute right-0 z-20 mt-1 w-60 origin-top-right overflow-hidden rounded-lg
+                       border border-neon/20 bg-raised shadow-2xl
+                       motion-safe:animate-[slide-up-fade_180ms_ease-out]"
           >
             {FORMATS.map((format) => {
               // TXT si puede llevar el parcial abierto; Markdown y SRT necesitan
@@ -158,6 +162,24 @@ export function ExportMenu({ blocks, interim, language, endMs, onClear }: Export
   );
 }
 
+/**
+ * Confirmacion de "Limpiar", en un portal sobre `document.body`.
+ *
+ * # Por que un portal y no aqui dentro
+ *
+ * Este dialogo es `position: fixed` y quiere cubrir la ventana entera, pero el `footer`
+ * que lo contiene tiene `backdrop-blur`. Cualquier ancestro con `backdrop-filter` se
+ * convierte en bloque contenedor de los descendientes fijos, igual que pasa con
+ * `transform` y con `filter`: el `fixed` deja de medir contra la ventana y mide contra
+ * ese ancestro. El resultado es un fondo opaco del alto de una franja de 40 px pegada
+ * abajo y un recuadro centrado en ella, que es un boton flotando con su sombra pero sin
+ * modal alrededor. El overlay de `DropZone` tiene el mismo problema y lo resuelve igual,
+ * con `createPortal`.
+ *
+ * Solo se monta tras un clic, o sea ya en el cliente, asi que `document` existe: no hace
+ * falta bandera de "montado" ni IIFE asincrono, y el primer render coincide con el del
+ * servidor.
+ */
 function ConfirmDialog({
   onCancel,
   onConfirm,
@@ -176,9 +198,10 @@ function ConfirmDialog({
     return () => document.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center bg-obsidian/80 p-6"
+      className="fixed inset-0 z-30 flex items-center justify-center bg-obsidian/80 p-6
+                 motion-safe:animate-[fade-in_200ms_ease-out]"
       // El clic en el fondo cierra; el interior para que no. `onClick` con
       // `stopPropagation` es mas simple que comparar el target en cada rama.
       onClick={onCancel}
@@ -188,7 +211,8 @@ function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="limpiar-titulo"
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-sm rounded-xl border border-neon/20 bg-panel p-5 shadow-2xl"
+        className="w-full max-w-sm rounded-xl border border-neon/20 bg-panel p-5 shadow-2xl
+                   motion-safe:animate-[slide-up-fade_260ms_ease-out]"
       >
         <h2 id="limpiar-titulo" className="text-sm font-medium text-snow">
           Limpiar la transcripcion
@@ -217,6 +241,7 @@ function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

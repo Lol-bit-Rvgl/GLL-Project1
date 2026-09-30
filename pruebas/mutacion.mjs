@@ -69,6 +69,79 @@ const MUTACIONES = [
     fichero: "src/components/TranscriptStream.tsx",
     rompe: (t) => t.replace(/(className="[^"]*)\btext-flare\b([^"]*")/, "$1text-flare/60$2"),
   },
+  {
+    // La forma en que se rompe: cambiar el indicador a `left` porque "se ve igual".
+    // Solo se ve mal al cambiar de fuente, que es cuando el `left` se anima.
+    nombre: "el conmutador animando `left` en vez de `transform`",
+    fichero: "src/components/ControlBar.tsx",
+    rompe: (t) =>
+      t.replace("transition-transform duration-200 ease-out", "transition-[left] duration-200 ease-out"),
+  },
+  {
+    // El mismo fallo colado por la puerta de atras: `transition-all` deja pasar `left`
+    // sin que la comprobacion de la transicion lo note.
+    nombre: "el conmutador con `transition-all`, que deja pasar `left`",
+    fichero: "src/components/ControlBar.tsx",
+    rompe: (t) =>
+      t.replace("transition-transform duration-200 ease-out", "transition-all duration-200 ease-out"),
+  },
+  {
+    // Quitar el `motion-safe:` es la forma natural de "simplificar" la clase.
+    nombre: "la entrada del bloque sin `motion-safe`, fuera del alcance de reduced-motion",
+    fichero: "src/components/TranscriptStream.tsx",
+    rompe: (t) => t.replaceAll("motion-safe:animate-[slide-up-fade_", "animate-[slide-up-fade_"),
+  },
+  {
+    // La reescritura "obvia" del contador: un efecto que cuenta. Pinta el historial
+    // entero una vez mas por frase y rompe las reglas del React Compiler.
+    nombre: "el contador de frases sin leer contado en un useEffect",
+    fichero: "src/components/TranscriptStream.tsx",
+    rompe: (t) =>
+      t
+        .replace("import { memo, useCallback, useLayoutEffect, useRef, useState } from \"react\";", "import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from \"react\";")
+        .replace(
+          "  const unread = anchor === null ? 0 : Math.max(0, blocks.length - anchor);",
+          [
+            "  const [unread, setUnread] = useState(0);",
+            "  useEffect(() => {",
+            "    setUnread(anchor === null ? 0 : Math.max(0, blocks.length - anchor));",
+            "  }, [anchor, blocks.length]);",
+          ].join("\n"),
+        ),
+  },
+  {
+    // Quitar el portal: el dialogo vuelve a su sitio y el `backdrop-blur` del footer lo
+    // convierte en bloque contenedor del `fixed`.
+    nombre: "el dialogo de confirmar sin portal, dentro del footer con backdrop-blur",
+    fichero: "src/components/ExportMenu.tsx",
+    rompe: (t) =>
+      t
+        .replace("import { createPortal } from \"react-dom\";\n", "")
+        .replace("  return createPortal(", "  return (")
+        .replace(/^\s*document\.body,$/mu, "    null,"),
+  },
+  {
+    // El bug por descuido: `slide-up-fade` es un copia de `fade-in` con otro nombre.
+    // Compila, no hay ni un error, y el ritmo largo del bloque de texto se pierde.
+    nombre: "slide-up-fade calcado de fade-in: 6 px en vez de 12",
+    fichero: "src/app/globals.css",
+    rompe: (t) =>
+      t.replace(
+        /(@keyframes slide-up-fade \{[^}]*?transform: translateY\()12px(\))/u,
+        "$16px$2",
+      ),
+  },
+  {
+    // La misma clase de fallo que el AGENTS.md prohibe: animar `top` en vez de
+    // `transform` para "no complicarse" el keyframe.
+    nombre: "la entrada del bloque animando `top` en vez de `transform`",
+    fichero: "src/app/globals.css",
+    rompe: (t) =>
+      t.replace(
+        /@keyframes slide-up-fade \{[^}]*?\}/u,
+        "@keyframes slide-up-fade {\n  from {\n    opacity: 0;\n    top: 12px;\n  }\n  to {\n    opacity: 1;\n    top: 0;\n  }\n}",
+      ),
+  },
 ];
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lyricstream-mutacion-"));

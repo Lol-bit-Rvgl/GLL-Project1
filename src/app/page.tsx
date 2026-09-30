@@ -218,7 +218,6 @@ export default function Home() {
       <ControlBar
         phase={phase}
         source={source}
-        language={language}
         busy={busy}
         engineReady={engine?.real_inference ?? false}
         modelReady={modelReady}
@@ -227,7 +226,6 @@ export default function Home() {
         duckMusic={duckMusic}
         onToggle={onToggle}
         onSourceChange={onSourceChange}
-        onLanguageChange={onLanguageChange}
         onDownloadModel={onDownload}
         onDuckMusicChange={setDuckMusic}
       />
@@ -267,6 +265,16 @@ export default function Home() {
         capturing={capturing}
       />
 
+      {/*
+        El menu de exportar se queda en la franja de arriba del dock, y NO dentro de el.
+
+        Lleva el recuento de palabras, que cambia con cada bloque cerrado. Si viviera
+        dentro de `DockedPlayer` pasaria a formar parte del subarbol que se repinta cuatro
+        veces por segundo con la posicion del audio, y el historial entero se repintaria
+        con cada avance de la cancion. Esa separacion es el motivo de que el motor este
+        fuera de React; este menu es la prueba de que sigue valiendo. El dock lleva solo
+        el idioma, que cambia una vez cada varias frases.
+      */}
       <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-neon/12 bg-panel/60 px-6 py-2.5 backdrop-blur">
         <VuMeter
           active={capturing}
@@ -281,7 +289,13 @@ export default function Home() {
         />
       </footer>
 
-      <DockedPlayer source={source} capturing={capturing} />
+      <DockedPlayer
+        source={source}
+        capturing={capturing}
+        language={language}
+        onLanguageChange={onLanguageChange}
+        busy={busy}
+      />
     </main>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Barra superior: control de captura, origen, idioma y estado.
+ * Barra superior: marca, conmutador de fuente y control de captura.
  *
  * # Un solo boton, no dos
  *
@@ -13,14 +13,23 @@
  * El estado se lee del backend, no de un `useState` propio: si el comando falla a
  * mitad (por ejemplo, el modelo no esta), la fase se recalcula sola y la UI no
  * muestra "transcribiendo" cuando no lo esta.
+ *
+ * # El indicador del conmutador se mueve con `transform`
+ *
+ * Un `left` animado por transicion de CSS recalcula la composicion en cada frame, y
+ * esta barra esta en la misma pagina que la transcripcion, que ya compite con el STT
+ * por el hilo principal. `translateX` lo resuelve el compositor con una matriz.
+ *
+ * La posicion sale de las props, sin estado ni efecto: `source` ya es la verdad, y
+ * duplicarla en un `useState` obligaria a mantener dos copias que algun momento
+ * dejarian de cuadrar.
  */
 
-import type { AudioSource, EnginePhase, Language } from "@/lib/types";
+import type { AudioSource, EnginePhase } from "@/lib/types";
 
 export type ControlBarProps = {
   phase: EnginePhase;
   source: AudioSource;
-  language: Language;
   /** `true` si hay una accion en curso. */
   busy: boolean;
   /** `true` si el motor hace inferencia real. */
@@ -35,7 +44,6 @@ export type ControlBarProps = {
   duckMusic: boolean;
   onToggle: () => void;
   onSourceChange: (source: AudioSource) => void;
-  onLanguageChange: (language: Language) => void;
   onDownloadModel: () => void;
   onDuckMusicChange: (duck: boolean) => void;
 };
@@ -56,7 +64,6 @@ const PHASE_LABEL: Record<EnginePhase, string> = {
 export function ControlBar({
   phase,
   source,
-  language,
   busy,
   engineReady,
   modelReady,
@@ -65,15 +72,38 @@ export function ControlBar({
   duckMusic,
   onToggle,
   onSourceChange,
-  onLanguageChange,
   onDownloadModel,
   onDuckMusicChange,
 }: ControlBarProps) {
   const live = phase !== "reposo";
-  const mainLabel = live ? "Pausar" : "Iniciar";
 
   return (
-    <header className="relative flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-neon/12 bg-panel/80 px-6 py-3 backdrop-blur">
+    /*
+     * Tres grupos, no uno.
+     *
+     * Con todo en un solo `flex-wrap`, a 1000 px de ancho el elemento con `ml-auto` (la
+     * marca) se caia a una TERCERA fila solo, y la cabecera pasaba de 46 a 93 px: el 13 %
+     * de la ventana para cromo, con el canal de textoStripped por el medio. Medido con
+     * CDP, no estimado.
+     *
+     * Separando en marca / captura / ajustes, lo que no cabe se va a una segunda fila
+     * entera y equilibrada, y la marca se queda arriba a la izquierda. `justify-between`
+     * reparte el sobrante en vez de acumularlo delante de un `ml-auto`, que es lo que
+     * empujaba la marca al desborde.
+     */
+    <header className="relative flex flex-wrap items-center justify-between gap-x-4 gap-y-2
+                        border-b border-neon/12 bg-panel/80 px-6 py-2.5 backdrop-blur">
+      <div className="flex items-center gap-2.5">
+        <span className="text-sm font-semibold tracking-tight text-snow">LyricStream STT</span>
+        <span
+          className="rounded border border-neon/30 bg-neon/[0.07] px-1.5 py-0.5
+                     font-mono text-[10px] leading-none tracking-wide text-flare"
+          title="Hecho por GLL"
+        >
+          by GLL
+        </span>
+      </div>
+
       <div className="flex items-center gap-3">
         {/*
           El boton cambia de piel, no solo de color: en reposo es una placa oscura con
@@ -96,9 +126,6 @@ export function ControlBar({
                           : "border border-neon/40 bg-raised text-snow hover:border-neon/80 hover:bg-neon/10"
                       }`}
         >
-          {/* Icono de pausa/reproducir en SVG puro: no depende de una libreria de
-              iconos para dos triangulos, y no hereda el `currentColor` de forma
-              inesperada. */}
           {live ? (
             <span className="live-dot" aria-hidden="true" />
           ) : (
@@ -106,37 +133,14 @@ export function ControlBar({
               <path d="M4 2.5v11l9-5.5z" />
             </svg>
           )}
-          {mainLabel}
+          {live ? "TRANSCRIBIENDO EN VIVO" : "Iniciar"}
         </button>
 
         <StatusPill phase={phase} speaking={speaking} />
       </div>
 
-      <div className="flex items-center gap-3">
-        <Field label="Fuente">
-          <select
-            value={source}
-            disabled={busy || live}
-            onChange={(event) => onSourceChange(event.target.value as AudioSource)}
-            className={selectClass}
-          >
-            <option value="loopback">Audio del sistema</option>
-            <option value="mic">Microfono</option>
-          </select>
-        </Field>
-
-        <Field label="Idioma">
-          <select
-            value={language}
-            disabled={busy}
-            onChange={(event) => onLanguageChange(event.target.value as Language)}
-            className={selectClass}
-          >
-            <option value="auto">Automatico</option>
-            <option value="es">Espanol</option>
-            <option value="en">Ingles</option>
-          </select>
-        </Field>
+      <div className="flex flex-wrap items-center gap-3">
+        <SourceSwitch value={source} disabled={busy || live} onChange={onSourceChange} />
 
         {!modelReady && (
           <button
@@ -152,9 +156,7 @@ export function ControlBar({
         )}
 
         {live && !engineReady && (
-          <span className="text-xs text-gold/80">
-            Inferencia no disponible
-          </span>
+          <span className="text-xs text-gold/80">Inferencia no disponible</span>
         )}
 
         {/*
@@ -162,18 +164,114 @@ export function ControlBar({
           transcribe reuniones con musica de fondo de proposito. Vive en la barra y no
           en el reproductor porque lo decide quien va a transcribir, no quien esta
           escuchando.
+
+          El texto corto cabe en la segunda fila de la cabecera a 1000 px; el largo
+          ("al transcribir") no, y empujaba el resto de la barra a una fila mas. El
+          matiz entero sigue en el `title` y en el `aria-label`, que es donde se busca
+          cuando la etiqueta no cabe.
         */}
-        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-ink hover:text-snow">
+        <label
+          title="Baja la musica mientras transcribe, y la vuelve a subir al terminar"
+          className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-ink hover:text-snow"
+        >
           <input
             type="checkbox"
             checked={duckMusic}
             onChange={(event) => onDuckMusicChange(event.target.checked)}
+            aria-label="Silenciar la musica mientras transcribe"
             className="h-3.5 w-3.5 cursor-pointer accent-neon"
           />
-          Silenciar musica al transcribir
+          Silenciar musica
         </label>
       </div>
     </header>
+  );
+}
+
+/**
+ * Conmutador de fuente, dos estados, indicador deslizante.
+ *
+ * No es un `<select>` porque el texto es largo ("Sistema (Loopback)" frente a
+ * "Microfono") y un desplegable nativo lo recorta en un portatil estrecho. Ademas el
+ * estado se ve de un vistazo sin pinchar, que es justo lo que se necesita antes de
+ * arrancar: con loopback entra en la transcripcion todo lo que suene.
+ */
+function SourceSwitch({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: AudioSource;
+  disabled: boolean;
+  onChange: (source: AudioSource) => void;
+}) {
+  const mic = value === "mic";
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Fuente de audio"
+      className="relative flex items-center rounded-full border border-neon/20 bg-raised p-0.5"
+    >
+      {/* Indicador: la mitad de ancho, desplazada con `translateX` al 100 % cuando
+          toca el segundo estado. Sin transicion de `left`, por lo mismo que el giro
+          de la caratula y las barras del vumetro. */}
+      <span
+        aria-hidden="true"
+        className={`absolute inset-y-0.5 left-0.5 w-[calc(50%-0.25rem)] rounded-full
+                    bg-gradient-to-b from-orange-600/70 to-amber-500/50 ring-1 ring-neon/40
+                    transition-transform duration-200 ease-out ${
+                      mic ? "translate-x-[calc(100%+0.25rem)]" : "translate-x-0"
+                    }`}
+      />
+      <SwitchOption
+        active={!mic}
+        disabled={disabled}
+        onClick={() => onChange("loopback")}
+        title="Captura lo que reproduce el sistema"
+      >
+        Sistema (Loopback)
+      </SwitchOption>
+      <SwitchOption
+        active={mic}
+        disabled={disabled}
+        onClick={() => onChange("mic")}
+        title="Captura el microfono"
+      >
+        Microfono
+      </SwitchOption>
+    </div>
+  );
+}
+
+function SwitchOption({
+  active,
+  disabled,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={`relative z-10 rounded-full px-3 py-1.5 text-xs
+                  transition-colors duration-200
+                  disabled:cursor-not-allowed disabled:opacity-50 ${
+                    active ? "text-snow" : "text-slate-ink hover:text-snow"
+                  }`}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -210,17 +308,3 @@ function StatusPill({
     </span>
   );
 }
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex items-center gap-2 text-xs text-slate-ink">
-      <span className="select-none">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-const selectClass =
-  "rounded-md border border-neon/15 bg-raised px-2.5 py-1.5 text-xs text-snow " +
-  "transition-colors hover:border-neon/40 focus-visible:outline-2 focus-visible:outline-offset-2 " +
-  "focus-visible:outline-neon disabled:cursor-not-allowed disabled:opacity-50";

@@ -298,6 +298,33 @@ body {
   }
 }
 
+/*
+ * Entrada de un bloque recien consolidado: `slide-up-fade`.
+ *
+ * # Por que convive con `fade-in` y no lo sustituye
+ *
+ * `fade-in` mueve 6 px y es la entrada corta de los elementos pequenos (lineas de
+ * estado, avisos). Este es el movimiento largo del canal de texto, que entra 12 px:
+ * un bloque de texto completo necesita separarse mas del borde para que el ojo lo lea
+ * como algo nuevo y no como una frase que se ha recolocado. Se declara aparte en vez de
+ * cambiar `fade-in` porque quien usa cada uno tiene un ritmo distinto, y un unico
+ * keyframe con un solo valor obligaria a los dos a compartir distancia.
+ *
+ * Solo `transform` y `opacity`, por el motivo de siempre: es lo que el compositor mueve
+ * sin tocar disposicion. En un canal que puede tener miles de lineas, un `translateY` en
+ * layout reordenaria la columna entera en cada bloque cerrado.
+ */
+@keyframes slide-up-fade {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Barra de scroll fina y discreta. El canal de texto puede tener miles de lineas y
    una barra de 16 px comiendo el ancho se nota. `scrollbar-color` es la via estandar
    y `::-webkit-scrollbar` la de WebView2, que es lo que usa Tauri en Windows. */

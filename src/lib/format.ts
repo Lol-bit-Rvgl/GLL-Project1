@@ -54,6 +54,28 @@ export function joinIncrements(parts: readonly string[]): string {
   return out;
 }
 
+/**
+ * `2026-09-30 16:23` — fecha y hora en formato corto, para la cabecera del Markdown.
+ *
+ * # Por que convierte y no recorta la cadena
+ *
+ * Quien llama tiene un `Date` o un ISO completo, y recortarlo a 16 caracteres parecia
+ * suficiente hasta que salio el fallo: `toISOString()` es UTC, asi que un `slice(0, 16)`
+ * ponia en el fichero la hora de UTC y no la de la persona que transcribia. Con dos horas
+ * de diferencia, la fecha del documento no cuadra con la del explorador y parece un fallo.
+ * Aqui se pasa por `Date`, que usa la zona local.
+ *
+ * `getFullYear` y no `getUTCFullYear` por lo mismo.
+ */
+export function dateStamp(value: Date | string): string {
+  const date = value instanceof Date ? value : new Date(value);
+  // Una fecha invalida no es motivo para que la cabecera rompa el export: `NaN` se
+  // cuela en el fichero y el usuario lo ve como un fallo de la app.
+  if (Number.isNaN(date.getTime())) return "";
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return `${day} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function pad(value: number): string {
   return String(value).padStart(2, "0");
 }

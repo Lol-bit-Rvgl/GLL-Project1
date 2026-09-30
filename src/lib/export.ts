@@ -16,19 +16,19 @@
  * sola vez al exportar.
  */
 
-import { clock, srtTime, wordCount } from "./format";
+import { clock, dateStamp, srtTime, wordCount } from "./format";
 import type { Block } from "./transcript";
 
 /** Formatos que el menu de descarga ofrece. */
 export type ExportFormat = "txt" | "md" | "srt";
 
-/** Metadatos que se escriben en la cabecera de Markdown y SRT. */
+/** Metadatos que se escriben en la cabecera de Markdown. */
 export type ExportMeta = {
   /** Idioma forzado, o `auto` si se dejo detectar. */
   language: string;
   /** Duracion total de la sesion, en ms. */
   durationMs: number;
-  /** Fecha de exportacion, en ISO. */
+  /** Instante de la exportacion, en ISO. */
   exportedAt: string;
 };
 
@@ -74,17 +74,41 @@ export function renderTxt(paragraphs: readonly string[]): string {
   return clean.length === 0 ? "" : `${clean.join("\n\n")}\n`;
 }
 
-/** Markdown: cabecera con metadatos y un bloque por frase. */
+/**
+ * Markdown: cabecera de marca, metadatos y un bloque por frase.
+ *
+ * # Por que la cabecera lleva la marca y el TXT no
+ *
+ * El Markdown es el unico de los tres que se abre como documento: tiene estructura, se
+ * previsualiza con formato y acaba en un repositorio o en un informe. Ahi la autoria y
+ * la fecha son informacion, y quitarlas al pegarlo en otro sitio deja un documento sin
+ * origen.
+ *
+ * En TXT no se pone, y no por pereza: un `.txt` es texto plano, y un fichero que abre
+ * con `#`, `*` y `---` deja de ser el texto que la persona quiere pegar en un correo o
+ * en un formulario. El TXT tiene que seguir siendo exactamente lo que se ve en
+ * pantalla. El SRT tampoco lleva cabecera porque su formato es cerrado: cualquier linea
+ * que no sea indice, tiempos o texto hace que el reproductor de subtitulos la trate como
+ * una linea de la frase.
+ *
+ * `Fecha` va en hora local, que es la de quien transcribe; el nombre del fichero lleva
+ * su propia marca y por eso se puede seguir de un vistazo en una carpeta.
+ */
 export function renderMarkdown(blocks: readonly Block[], meta: ExportMeta): string {
   const total = wordCount(blocks.map((block) => block.text).join(" "));
   const lines = [
-    "# Transcripcion",
+    "# Transcripcion de Sesion - LyricStream STT",
+    "",
+    "*Generado automaticamente por LyricStream STT (por GLL)*",
+    "",
+    `*Fecha: ${dateStamp(meta.exportedAt)}*`,
+    "",
+    "---",
     "",
     `- Duracion: ${clock(meta.durationMs)}`,
     `- Palabras: ${total}`,
     // `auto` no es un idioma concreto: decirlo evita que alguien lo lea como "ingles".
     `- Idioma: ${meta.language === "auto" ? "automatico" : meta.language}`,
-    `- Exportado: ${meta.exportedAt}`,
     "",
   ];
   for (const block of blocks) {

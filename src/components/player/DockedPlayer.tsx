@@ -18,13 +18,14 @@
 
 import { useRef, useState } from "react";
 
+import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { DropZone } from "./DropZone";
 import { QueueDrawer } from "./QueueDrawer";
 import { Scrubber } from "./Scrubber";
 import { VolumeControl } from "./VolumeControl";
 import { AUDIO_EXTENSIONS, captureConflict } from "@/lib/player/types";
 import type { Track } from "@/lib/player/types";
-import type { AudioSource } from "@/lib/types";
+import type { AudioSource, Language } from "@/lib/types";
 import {
   useMusicControls,
   useMusicPlayer,
@@ -36,9 +37,32 @@ export type DockedPlayerProps = {
   source: AudioSource;
   /** `true` mientras la captura esta activa. */
   capturing: boolean;
+  /**
+   * Idioma forzado de la transcripcion.
+   *
+   * Va en el dock y no en la barra de captura por medida, no por gusto: con el selector
+   * en la cabecera, esta ocupaba 93 px en tres filas a 1000 px de ancho, con la marca
+   * sola en la tercera, y el canal de texto se quedaba en 482 px. Bajandolo aqui, la
+   * cabecera cabe en una fila y le devuelve 47 px al texto. Medido con CDP.
+   *
+   * Y es seguro aqui pese a que este subarbol se repinta cuatro veces por segundo: el
+   * idioma cambia una vez cada varias frases, no cuatro veces por segundo. Lo que NO
+   * se ha movido aqui es el menu de exportar, que lleva el recuento de palabras; eso si
+   * cambiaria con la transcripcion y entraria en el repintado de la posicion del audio.
+   */
+  language: Language;
+  onLanguageChange: (language: Language) => void;
+  /** `true` si hay una accion de backend en curso. */
+  busy: boolean;
 };
 
-export function DockedPlayer({ source, capturing }: DockedPlayerProps) {
+export function DockedPlayer({
+  source,
+  capturing,
+  language,
+  onLanguageChange,
+  busy,
+}: DockedPlayerProps) {
   const state = useMusicPlayer();
   const commands = useMusicControls();
   const { message, dismiss } = usePlayerError();
@@ -75,7 +99,19 @@ export function DockedPlayer({ source, capturing }: DockedPlayerProps) {
         }}
       />
 
-      <div className="border-t border-neon/15 bg-panel/80 backdrop-blur">
+      {/*
+        Panel flotante: `mx-4 mb-4` y esquinas redondeadas en vez de una franja pegada al
+        borde con una linea de arriba. La diferencia no es decorativa: como el dock ya
+        queda separado del resto por un margen, deja de leerse como el borde de la
+        ventana y pasa a leerse como un objeto -un panel- que esta encima. Con la franja
+        al borde, todo lo que habia dentro parecia parte del fondo.
+
+        `overflow-hidden` recorta los bordes redondeados de los hijos. Sin el, el aviso de
+        loopback y los mensajes de error se salen por las esquinas del panel en cuanto
+        tienen fondo. Los hijos con `position: absolute` no se ven afectados: no hay
+        ninguno dentro, el unicooverlay de la app va en un portal.
+      */}
+      <div className="mx-4 mb-4 overflow-hidden rounded-2xl border border-neon/15 bg-panel/80 shadow-[0_8px_32px_rgba(0,0,0,0.45)] backdrop-blur">
         {conflict.warns && (
           <p
             role="status"
@@ -189,6 +225,10 @@ export function DockedPlayer({ source, capturing }: DockedPlayerProps) {
           )}
 
           <div className="flex shrink-0 items-center gap-2">
+            {/* El idioma va el primero del grupo de la derecha: es lo que se cambia de
+                verdad durante una sesion, y asi queda a la vista sin subir la barra. */}
+            <LanguageSwitch value={language} disabled={busy} onChange={onLanguageChange} />
+
             {/*
               El boton de anadir tambien sale con musica sonando. Sin el, una vez en
               marcha la unica forma de ampliar la cola es soltar ficheros en la ventana,

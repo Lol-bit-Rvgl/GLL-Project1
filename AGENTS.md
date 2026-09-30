@@ -165,6 +165,44 @@ incumple. No sonitizedas para hacerlas pasar:
   El autoscroll usa `stickToBottom` como dependencia del `useLayoutEffect` en vez de un `ref`
   espejo, que ademas era la logica correcta.
 
+## Reparto de la pantalla, y por que es el que hay
+
+Medido con `D:\Temp\opencode\medir.mjs` sobre el export estatico a 1000x700, con el historial
+desbordando y un doble de las APIs de Tauri. **No razonar estos numeros, medirlos**: las tres
+decisiones siguientes salieron de ahi y no de criterio.
+
+- **El idioma vive en el dock, no en la cabecera.** Con el selector de idioma arriba, la cabecera
+  ocupaba 93 px en **tres** filas a 1000 px, con la marca sola en la tercera, y el canal de texto se
+  quedaba en 482 px. Bajandolo al dock, la cabecera cabe en **una** fila de 57 px y el canal sube a
+  518. Son 36 px de texto recuperado, que es un 7 % de la ventana.
+- **El menu de exportar NO entra en el dock.** Lleva el recuento de palabras, que cambia con cada
+  bloque cerrado. Adentro de `DockedPlayer` pasaria a formar parte del subarbol que se repinta
+  cuatro veces por segundo con la posicion del audio, y el historial entero se repintaria en cada
+  avance de la cancion. El dock lleva solo el idioma, que cambia una vez cada varias frases: el
+  criterio es "cambia con el audio o no", no "cabe en el dock".
+- **La cabecera son tres grupos, no uno.** Con todo en un solo `flex-wrap`, el elemento con `ml-auto`
+  (la marca) se caia a una tercera fila solo. `justify-between` con marca / captura / ajustes reparte
+  el sobrante en vez de acumularlo delante del `ml-auto`, que es lo que lo empujaba al desborde.
+
+**El boton de confirmar "Limpiar" va en un portal.** Es `position: fixed` y el `footer` que lo
+contiene tiene `backdrop-blur`; cualquier ancestro con `backdrop-filter` se convierte en bloque
+contenedor de los descendientes fijos, igual que `transform` y `filter`. Sin el portal, el fondo opaco
+cubria una franja de 40 px pegada abajo y el recuadro salia centrado en ella: un boton flotando con su
+sombra y sin modal alrededor. Es el mismo motivo y la misma solucion que el overlay de `DropZone`.
+
+**El contador de frases sin leer se deriva, no se cuenta.** `TranscriptStream` guarda el **ancla** -el
+numero de bloques que habia cuando el usuario se solto del final- y cuenta `blocks.length - anchor`
+durante el render. Un contador de verdade tendria que incrementarse al llegar un bloque, y eso solo
+se puede hacer desde un efecto: seria un `setState` por frase, que ademas pinta el historial entero
+una vez mas. El ancla solo se mueve al **cruzar** el umbral, no en cada evento de scroll, o subir y
+bajar un poco lo pondria a cero. `pruebas/estructural.mjs` prohibe que aparezca un `useEffect` en ese
+fichero por este motivo.
+
+**La cabecera de marca va solo en el Markdown.** El TXT sigue siendo texto plano y el SRT tiene
+formato cerrado. `dateStamp` pasa por `Date` y no por `toISOString().slice(0, 16)`: este ultimo es UTC,
+y con dos horas de diferencia la fecha del documento no cuadra con la del explorador. Una fecha
+invalida sale `""` en vez de `NaN`, porque la cabecera no puede romper el export.
+
 ## El tema: `src/app/globals.css`
 
 Dark Obsidian & Neon Amber, **dark por defecto** y sin `prefers-color-scheme`. La version anterior
@@ -196,9 +234,28 @@ Cuatro reglas del tema que no se pueden deshacer, cada una con su motivo:
   una libreria de iconos para dos triangulos.
 
 `D:\Temp\opencode\check-css.js` comprueba la hoja de `.next/static`: que esten todos los tokens con su
-hex, los cinco keyframes, el bloque de reduced motion completo, y que no haya ninguna transicion de
+hex, los seis keyframes, el bloque de reduced motion completo, y que no haya ninguna transicion de
 disposicion. El giro de la caratula se comprueba aparte, porque `motion-safe:` lo envuelve en su propia
 media query y no se ve en el mismo sitio que las nuestras.
+
+## Los seis keyframes
+
+`amber-pulse`, `cursor-glow`, `equalizer-wave` y `live-dot` son los continuos. Los dos de entrada son
+**distintos a proposito** y no uno con dos nombres:
+
+- `fade-in` mueve **6 px**: entradas cortas, desplegables y lineas de estado.
+- `slide-up-fade` mueve **12 px**: la entrada de un bloque de texto cerrado en el canal.
+
+Un bloque de frase completa necesita separarse mas del borde para que el ojo lo lea como algo nuevo y
+no como una frase recolocada, y ese ritmo no le sirve a una etiqueta de 12 px. Si alguien "simplifica"
+`slide-up-fade` a 6 px, no hay error: el CSS compila y la animacion sigue existiendo. Lo caza
+`pruebas/estructural.mjs`, que compara las dos distancias y ademas prohibe cualquier propiedad de
+disposicion dentro de un keyframe de entrada.
+
+**Los dos van envueltos en `motion-safe:`.** En headless, `prefers-reduced-motion` sale `reduce` por
+defecto, asi que una animacion mal envuelta no se ve NUNCA en una medicion por CDP: hay que emular
+`no-preference` explicitamente para poder distinguir "no hay animacion" de "no la busques". El medidor
+`D:\Temp\opencode\medir.mjs` mide las dos caras por eso.
 
 ## El reproductor: `src/lib/player/`
 

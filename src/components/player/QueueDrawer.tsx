@@ -250,6 +250,18 @@ export function QueueDrawer({
             Anadir
           </button>
         </form>
+
+        {/*
+          Pie de autoria. Va en el cajon y no siempre en pantalla porque son tres lineas
+          de texto que no se van a leer mas que una vez: abiertas por el dock, ocupan el
+          ancho de la barra inferior que ya va justa, y fijas todos los dias sobre el
+          audio no se leen. El badge "by GLL" de la cabecera si esta siempre visible, que
+          es lo que identifica la app de un vistazo; aqui va la informacion completa.
+        */}
+        <p className="border-t border-neon/12 px-3 py-2 text-center text-[10px] leading-4 text-slate-ink/70">
+          Desarrollado por{" "}
+          <span className="font-mono text-flare">GLL</span> · Motor Whisper 100% Local
+        </p>
       </aside>
     </div>
   );
