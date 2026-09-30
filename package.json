@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test:estructural": "node pruebas/estructural.mjs",
+    "test:mutacion": "node pruebas/mutacion.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -2,9 +2,9 @@
 
 # This is NOT the Next.js you know
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+This version has breaking changes -- APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
 
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+This block is written and re-added by `next dev` -- verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
 
@@ -21,7 +21,7 @@ Sin esto, `cargo` no aparece: Rust no esta en el PATH del sistema.
 
 Restricciones del equipo: ~1 GB de RAM, target `x86_64-pc-windows-gnu`, MinGW GCC 16.2.
 `.cargo/config.toml` deja `jobs = 2`, `debug = 0` e `incremental = false` por eso. Compilar en
-`--release` tarda ~12 min; no es un error, es el objetivo por defecto. **No añadir dependencias
+`--release` tarda ~12 min; no es un error, es el objetivo por defecto. **No anadir dependencias
 grandes** (`reqwest`, `ort`, `whisper`, crates de criptografia): es justo lo que revienta la
 maquina. Ver "Descargas" mas abajo.
 
@@ -263,10 +263,14 @@ comparacion de hashes.
 ```powershell
 npm run lint                     # incluye las reglas de React Compiler, en modo error
 npm run build
+npm run test:estructural         # 6 tests sobre el fuente de los componentes
+npm run test:mutacion            # comprueba que esos 6 tests FALLAN sobre el codigo roto
 cargo fmt --all --check --manifest-path src-tauri\Cargo.toml   # 2 espacios, ancho 100
 cargo check --all-targets --manifest-path src-tauri\Cargo.toml
 cargo test --manifest-path src-tauri\Cargo.toml                 # 101 tests
 ```
+
+## Lo que el banco temporal **no** caza, y `pruebas/` si
 
 No hay runner de tests en el frontend y **no se anade uno**: `reduce`, los exportadores y el motor
 del reproductor se verifican compilando `src/lib` con `npx tsc --outDir` a un directorio temporal y
@@ -276,6 +280,42 @@ que eso sea posible sin arrastrar React ni Tauri. El banco del reproductor neces
 comando; el `FakeAudio` tiene que disparar `play` y `pause`, que es lo que el motor escucha. El del
 vumetro (`runvu.js`) es el que mas ha encontrado: la asimetria del envolvente no es comprobable viendo
 la barra, porque un `max` mal puesto tambien "parece" funcionar.
+
+Ese banco **no entra en el repo** (su propia cabecera lo dice) y por eso no protege nada: se
+recompila a mano y se pierde en el siguiente build limpio. Es una herramienta de busqueda, no una
+red de seguridad. Los tres bugs del vumetro que se encontraron midiendo la ventana con CDP
+demonstran el limite: **`vu.ts` era correcto en los tres**, el fallo estaba en el punto de llamada,
+dentro de un componente React que el banco no monta.
+
+`pruebas/estructural.mjs` cubre ese hueco y **si** se commitea, porque un test que se borra no
+previene una regresion. No es un runner: es `node` puro, sin dependencias, sin transformacion y sin
+jsdom, y lee el texto de `src/components/*.tsx` con `node:fs`. Comprueba cosas que no se ven
+ejecutando `vu.ts`:
+
+- Que `vuBarScale` no se pase **desnuda** a `.map()`. El bug era de aridad en el punto de llamada:
+  `map` invoca con `(valor, indice, array)` y el segundo parametro de `vuBarScale` es `floor`, asi
+  que el indice se colaba como suelo y la fila salia `scaleY(0)..scaleY(47)`. Un test de valores
+  no lo ve, porque los valores que pasaban eran validos.
+- Que la firma de `vuBarScale` **conserve** `floor`. Sin esta comprobacion, "arreglar" el bug
+  quitando el segundo parametro haria desaparecer la fuga por el motivo equivocado.
+- Que la fila tenga siempre `LEDS` barras y no las que lleva el historial ya llenado.
+- Que el `min-w` del grupo de la pista de al menos lo que necesitan 48 barras de 1 px, sus 47
+  huecos `gap-px`, su relleno `p-0.5`, el `gap-3` del grupo y el `w-14` de la lectura dB. Con
+  51 px medidos en vivo, los 47 huecos se comian 47 y cada barra salia a 0 px de dispositivo.
+- Que ni la pista ni las barras dejen de ser `flex-1`, que es lo que reparte el ancho.
+- Que el timestamp no vuelva a llevar un modificador de opacidad sobre `text-flare`.
+
+**`pruebas/mutacion.mjs` es la parte que no se puede saltar.** Pasa el codigo bueno, y un test que
+solo pasa no demuestra nada. El script copia `src/` a un temporal, aplica cada una de las ocho
+regresiones que ya ocurrieron **en la forma en que ocurrieron**, ejecuta `estructural.mjs` contra la
+copia rota y exige que FALLE. Las ocho tienen que morir. Si alguna sobrevive, ese test no vigilaba
+lo que dice vigilar. La primera vez que se ejecuto aviso de que una mutacion no aplicaba: la firma
+de `vuBarScale` era `floor: number = FLOOR` y la mutacion se habia escrito con otra forma. Es
+justo el fallo que este banco existe para encontrar, y por eso esta en el repo y no en el temporal.
+
+`estructural.mjs` acepta la raiz como argumento solo para eso: `node pruebas/estructural.mjs
+D:\copia` apunta los tests a otra copia de `src/`, que es lo que permite mutar sin editar el repo.
+
 
 `cargo test` sin el runtime desplegado omite 15 tests de inferencia real (7 del sys, 8 de
 streaming) y pasa los demas. Con `scripts\deploy-whisper.ps1` ejecutado, pasan todos.
