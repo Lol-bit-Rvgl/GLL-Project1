@@ -1,0 +1,155 @@
+name: Release Installer (NSIS)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-release:
+    name: Build & Package (Windows x64 GNU)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust (x86_64-pc-windows-gnu)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      # El host de windows-latest es msvc, asi que compilar para gnu es un CRUZADO: rustup
+      # trae el std de gnu, pero el enlazador (gcc) y las DLL de las que depende vienen del
+      # toolchain de MinGW y no son los de MSVC. El proyecto ya depende de ese toolchain en
+      # local (AGENTS.md: MinGW GCC 16.2), asi que se instala el mismo aqui en vez de
+      # confiar en lo que traiga la imagen del runner, que cambia sin avisar.
+      - name: Setup MinGW-w64 (enlazador del target gnu)
+        shell: pwsh
+        run: |
+          choco install mingw --no-progress -y
+          # gcc se anade al PATH de la sesion: cargo solo lo busca si esta en el PATH, y el
+          # target gnu no lo localiza por su cuenta.
+          $gcc = "C:\ProgramData\chocolatey\bin\gcc.exe"
+          if (-not (Test-Path $gcc)) { throw "mingw instalado pero no hay gcc.exe en $gcc" }
+          "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & gcc --version
+
+      # Solo se cachea el registro de crates, NO `src-tauri/target/`. El build de este
+      # proyecto es de release y el perfil por defecto no lleva incremental
+      # (`src-tauri/.cargo/config.toml`), asi que target/ no se puede reusar entre jobs:
+      # guardarlo en la cache solo gasta cuota (el limite de la cache son 10 GB por repo) y
+      # ralentiza cada guardado. Si alguna vez hace falta cachear compilados, la clave
+      # tiene que distinguir release de debug, que es justo lo que no hacia esta.
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-gnu-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-gnu-
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Deploy Whisper.cpp runtime DLLs
+        shell: pwsh
+        run: |
+          # Con `-ExecutionPolicy Bypass -File` y no `./deploy-whisper.ps1`: la politica de
+          # ejecucion por defecto de un runner de Windows puede denegar el script, y esa
+          # forma es la que ya documenta AGENTS.md para ejecutarlo en local.
+          powershell -ExecutionPolicy Bypass -File scripts\deploy-whisper.ps1
+          if ($LASTEXITCODE -ne 0) { throw "deploy-whisper.ps1 fallo con codigo $LASTEXITCODE" }
+          # La ruta lleva `crates/`: el runtime lo descarga deploy-whisper.ps1 a
+          # `src-tauri\crates\lyricstream-whisper-sys\runtime\`, que es la misma ruta que
+          # declara tauri.conf.json en bundle.resources. Sin `crates/` el paso revienta con
+          # "No se encuentra la ruta de acceso" y el job muere antes de comparar el conteo.
+          $runtime = "src-tauri/crates/lyricstream-whisper-sys/runtime"
+          $dllCount = @(Get-ChildItem -Path "$runtime/*.dll" -ErrorAction Stop).Count
+          Write-Host "DLLs de Whisper desplegadas en ${runtime}: $dllCount"
+          # 12 es el numero real que descarga el script. El umbral de 5 es deliberadamente
+          # bajo: lo que se quiere es pillar una descarga a medias, no afirmar una version.
+          if ($dllCount -lt 5) {
+            Write-Error "Faltan binarios de whisper.cpp en $runtime (solo hay $dllCount)"
+            exit 1
+          }
+
+      - name: Build Next.js Static Export
+        run: npm run build
+
+      - name: Build Tauri NSIS Package
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # `--bundles nsis` explicito: `tauri.conf.json` pone `"targets": "all"`, asi que
+          # sin esto el runner construye tambien el MSI, que ni se inspecciona ni se
+          # publica y aqui es el paso mas caro (el linkado con poco paralelismo).
+          npm run tauri build -- --target x86_64-pc-windows-gnu --bundles nsis
+
+      - name: Locate and inspect NSIS artifacts
+        id: artifacts
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis"
+          if (-not (Test-Path $bundleDir)) {
+            $bundleDir = "src-tauri/target/release/bundle/nsis"
+          }
+          
+          $installer = Get-ChildItem -Path $bundleDir -Filter "*setup.exe" | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "No se encontró el instalador NSIS (*setup.exe) en $bundleDir"
+            exit 1
+          }
+          
+          Write-Host "Instalador generado: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 2)) MB)"
+          # Se emiten DOS rutas, y no es redundancia. `installer_path` es absoluta y
+          # upload-artifact la resuelve contra GITHUB_WORKSPACE, que en el runner es
+          # D:\a\<repo>\<repo>; fuera de ahi la interpretacion no es fiable. La relativa
+          # se mide contra el workspace, que es el directorio de trabajo por defecto, y es
+          # la que se usa para subir. La absoluta se queda para el paso de release, donde
+          # hace falta el nombre completo del fichero.
+          #
+          # `Resolve-Path -Relative`, no `[System.IO.Path]::GetRelativePath`: ese metodo no
+          # existe en Windows PowerShell 5.1 (.NET Framework) y solo esta en PowerShell 7+,
+          # asi que con el primero el paso no depende de que `pwsh` resuelva a 5.1. `-Relative`
+          # deja el prefijo `.\` que se quita aqui: el punto de la regex va escapado.
+          $rel = (Resolve-Path -LiteralPath $installer.FullName -Relative) -replace '^\.[\\/]', ''
+          Write-Host "Relativo al workspace: $rel"
+          "installer_rel=$rel" >> $env:GITHUB_OUTPUT
+          "installer_path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+          "installer_name=$($installer.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload Artifact to Workflow Run
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifacts.outputs.installer_name }}
+          path: ${{ steps.artifacts.outputs.installer_rel }}
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.artifacts.outputs.installer_path }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
