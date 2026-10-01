@@ -19,6 +19,15 @@ env:
   # MinGW de abajo. Poner aqui una ruta absoluta la dejaria fija para el develop local, donde
   # el toolchain vive en otro sitio.
   CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: gcc
+  # Mitigacion del punto que la documentacion del repo senala como el que agota la memoria
+  # ("lo que se agota es la memoria durante el enlazado"): `ld` de GNU mantiene en RAM toda
+  # la tabla de simbolos del binario, y un ejecutable de Tauri con MinGW es enorme. Con
+  # `--no-keep-memory` vuelve a leer la tabla del disco en vez de cachearla, y
+  # `--reduce-memory-overheads` recorta las estructuras internas. El precio es unos segundos
+  # mas de enlazado; la alternativa es un proceso terminado por el sistema operativo
+  # (0xC0000409) sin mensaje, que es lo que dejo el log cortado en `Compiling ringbuf`.
+  # Solo afectan al enlazado, no a la correccion del binario resultante.
+  RUSTFLAGS: "-C link-arg=-Wl,--no-keep-memory -C link-arg=-Wl,--reduce-memory-overheads"
 
 jobs:
   build-and-release:
@@ -242,10 +251,25 @@ jobs:
             # anotaciones se leen sin autenticar en `/check-runs/{id}/annotations`, y el
             # resumen se renderiza en la pagina del run. Ademas son lo primero que ve quien
             # abre el run en el navegador, sin desplegar un log de miles de lineas.
+            $ErrorActionPreference = "Continue"
             $cola = @(Get-Content -Path $log -ErrorAction SilentlyContinue |
               Where-Object { $_.Trim() -ne "" } |
-              Select-Object -Last 20)
-            $ErrorActionPreference = "Continue"
+              Select-Object -Last 12)
+
+            # Datos de entorno ANTES del volcado, porque la primera anotacion es la que se
+            # ve sin desplegar nada. El codigo de salida en hexadecimal es el que delata una
+            # muerte por el sistema operativo y no un error de compilacion: `error[E...]` o
+            # `ld returned 1` dejan su texto en el log, pero un proceso terminado a la fuerza
+            # (0xC0000409 = STATUS_STACK_BUFFER_OVERRUN, 0xC0000017 sin memoria, ...) no
+            # escribe nada y deja el log cortado en seco, que es justo lo que se observo.
+            $disco = (Get-PSDrive -Name ($PWD.Drive.Name) -ErrorAction SilentlyContinue).Free
+            $discoGB = if ($disco) { [double]$disco / 1GB } else { -1 }
+            $ram = (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).FreePhysicalMemory
+            $ramGB = if ($ram) { [double]$ram / 1MB } else { -1 }
+            $bytes = if (Test-Path $log) { (Get-Item $log).Length } else { 0 }
+            $lineasTot = @(Get-Content $log -ErrorAction SilentlyContinue).Count
+            $diag = "exit={0} (0x{1:X8}) disco_libre={2:N2}GB ram_libre={3:N2}GB log={4}B lineas_log={5}" -f $code, $code, $discoGB, $ramGB, $bytes, $lineasTot
+            Write-Host "::error title=diagnostico::$diag"
 
             # La valla del bloque de codigo es de TILDES y no de backticks a proposito. En
             # una cadena doble de PowerShell el backtick es el caracter de escape, asi que
