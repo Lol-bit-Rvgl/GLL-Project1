@@ -37,16 +37,67 @@ jobs:
       # toolchain de MinGW y no son los de MSVC. El proyecto ya depende de ese toolchain en
       # local (AGENTS.md: MinGW GCC 16.2), asi que se instala el mismo aqui en vez de
       # confiar en lo que traiga la imagen del runner, que cambia sin avisar.
-      - name: Setup MinGW-w64 (enlazador del target gnu)
+      #
+      # Chocolatey NO deja los binarios en su propio `bin`: el paquete `mingw` desempaqueta
+      # el toolchain en `C:\ProgramData\mingw64\mingw64\bin` y deja un shim en
+      # `C:\ProgramData\chocolatey\bin`. Por eso el `Test-Path` contra
+      # `chocolatey\bin\gcc.exe` fallaba aunque la instalacion fuese correcta: ese shim no
+      # existe en todas las versiones del paquete. Se busca donde esta de verdad y, si la
+      # estructura de extraccion cambia, se rastrea en el arbol de chocolatey en vez de
+      # renunciar.
+      #
+      # `windows-latest` YA trae MinGW en esa misma ruta, asi que normalmente se usa el de la
+      # imagen y no se instala nada: se ahorra una descarga y el paso deja de depender de la red.
+      # El precio es que la version de gcc es la que traiga el runner y no la fijada aqui, que
+      # es justo lo que este comentario antes daba por bueno. Si un dia el linkado dejara de
+      # funcionar con la gcc de la imagen, el arreglo no es anadir rutas: es quitar el `if` y
+      # dejar `choco install mingw` siempre, para forzar la version.
+      #
+      # La ruta va a `GITHUB_PATH`, que es lo que hace que `cargo` y `tauri build` la vean en
+      # los pasos SIGUIENTES: cambiar `$env:PATH` dentro del `run` solo afecta a este proceso.
+      # `src-tauri/.cargo/config.toml` no fija `linker`, asi que el target gnu toma el `gcc`
+      # que encuentre en el PATH, y las DLL de las que dependen los binarios generados
+      # (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`, ...) salen del mismo directorio.
+      # `-Encoding utf8` sin BOM porque `shell: pwsh` es PowerShell 7; en Windows PowerShell
+      # 5.1 ese mismo valor escribe BOM y la primera entrada de GITHUB_PATH quedaria con un
+      # `FEFF` delante. Si este paso cambia de shell, el encoding hay que cambiar con el.
+      - name: Setup MinGW (GCC for x86_64-pc-windows-gnu)
         shell: pwsh
         run: |
-          choco install mingw --no-progress -y
-          # gcc se anade al PATH de la sesion: cargo solo lo busca si esta en el PATH, y el
-          # target gnu no lo localiza por su cuenta.
-          $gcc = "C:\ProgramData\chocolatey\bin\gcc.exe"
-          if (-not (Test-Path $gcc)) { throw "mingw instalado pero no hay gcc.exe en $gcc" }
-          "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $mingwBin = "C:\ProgramData\mingw64\mingw64\bin"
+          if (-not (Test-Path "$mingwBin\gcc.exe")) {
+            Write-Host "Instalando mingw via Chocolatey..."
+            choco install mingw --no-progress -y
+          }
+
+          # `$gccDir` es el directorio que de verdad acabo en el PATH. Se lleva por separado
+          # porque el mensaje de error tiene que nombrar ESE, no `$mingwBin`: si el fallo viene
+          # del fallback, decir "no se ejecuta desde C:\ProgramData\mingw64..." manda a mirar
+          # una ruta que no es la que se uso.
+          if (Test-Path "$mingwBin\gcc.exe") {
+            $gccDir = $mingwBin
+            Write-Host "MinGW encontrado en $gccDir. Anadiendo a GITHUB_PATH..."
+            $gccDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            $env:PATH = "$gccDir;$env:PATH"
+          } else {
+            # Fallback en caso de que cambie la estructura de extraccion
+            $fallback = Get-ChildItem -Path "C:\ProgramData\chocolatey\lib\mingw" -Filter "gcc.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($fallback) {
+              $gccDir = $fallback.DirectoryName
+              Write-Host "MinGW encontrado por busqueda en $gccDir. Anadiendo a GITHUB_PATH..."
+              $gccDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              $env:PATH = "$gccDir;$env:PATH"
+            } else {
+              Write-Error "No se pudo localizar gcc.exe ni en $mingwBin ni bajo C:\ProgramData\chocolatey\lib\mingw tras la instalacion de MinGW"
+              exit 1
+            }
+          }
+
+          # Verificacion directa ejecutando el compilador: un `Test-Path` rigido contra una
+          # ruta que el paquete puede cambiar es el fallo que se acaba de corregir. Lo que
+          # importa es que `gcc` CORRA, y que corra el que se acaba de poner en el PATH.
           & gcc --version
+          if ($LASTEXITCODE -ne 0) { throw "gcc no se ejecuta desde el PATH ($gccDir)" }
 
       # Solo se cachea el registro de crates, NO `src-tauri/target/`. El build de este
       # proyecto es de release y el perfil por defecto no lleva incremental
