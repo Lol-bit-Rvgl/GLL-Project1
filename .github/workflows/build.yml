@@ -118,22 +118,38 @@ jobs:
           }
           Write-Host "gcc verificado: $gccVer en $gccDir"
 
-      # Tauri v2 NO usa el NSIS del sistema: descarga el suyo a `%LOCALAPPDATA%\tauri` y
-      # empaqueta con ese. Por eso esto no es lo que arregla un fallo de empaquetado, y por
-      # eso se verifica en vez de instalar siempre: `choco install nsis` sobre una imagen que
-      # ya lo tiene puede devolver codigo distinto de cero y tumbar un build que iba bien.
-      # Si no esta, se instala y se avisa, pero NO se para aqui: que lo decida el paso de
-      # empaquetado, que es quien sabe si lo necesitaba.
+      # Tauri v2 NO usa el NSIS del sistema: descarga el suyo a `%LOCALAPPDATA%\tauri\NSIS`
+      # y empaqueta con ese. Este paso existe para que el log diga QUE NSIS hay y de donde
+      # sale, no para arreglar nada: cuando el fallo esta en el empaquetado, la version del
+      # NSIS en uso es la primera pregunta y era imposible de contestar sin abrir el log
+      # entero. Se instala solo si no hay ninguno, y su fallo NO para el build: `tauri` lleva
+      # el suyo y un `choco install nsis` que devuelve codigo distinto de cero no debe tumbar
+      # un empaquetado que iba a funcionar.
       - name: Ensure NSIS is available
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Continue"
+
+          # Donde Tauri guarda su NSIS. Se lista aunque este vacio: que el directorio NO
+          # exista ya es informacion, porque significa que el CLI tendra que descargarlo en
+          # el paso de empaquetado y ese es el punto donde se cae la red.
+          $propio = Join-Path $env:LOCALAPPDATA "tauri\NSIS"
+          if (Test-Path $propio) {
+            Write-Host "NSIS propio de tauri en $propio :"
+            Get-ChildItem $propio -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "  $($_.FullName)" }
+          } else {
+            Write-Host "aun no hay NSIS propio de tauri en $propio (se descargara al empaquetar)"
+          }
+
           if (Get-Command makensis -ErrorAction SilentlyContinue) {
-            Write-Host "makensis ya disponible en el PATH: $((Get-Command makensis).Source)"
+            Write-Host "makensis del sistema: $((Get-Command makensis).Source)"
+            & makensis -VERSION 2>&1 | ForEach-Object { Write-Host "  version: $_" }
           } else {
             Write-Host "makensis no esta en el PATH; instalando NSIS con Chocolatey..."
             choco install nsis --no-progress -y
             if ($LASTEXITCODE -ne 0) {
-              Write-Host "aviso: 'choco install nsis' devolvio $LASTEXITCODE. No es fatal: tauri usa su propio NSIS."
+              Write-Host "aviso: 'choco install nsis' devolvio $LASTEXITCODE. No es fatal: tauri usa el suyo."
             } else {
               Write-Host "NSIS instalado."
             }
@@ -220,8 +236,39 @@ jobs:
           # del ultimo comando NATIVO, que es `npm`.
           $code = $LASTEXITCODE
           if ($code -ne 0) {
+            # El log se publica por DOS canales, y no por capricho. Descargar el artefacto
+            # exige token (401 en repo publico) y la API de logs tambien (403), asi que sin
+            # esto un fallo de CI no deja ni un error legible en ningun sitio. Las
+            # anotaciones se leen sin autenticar en `/check-runs/{id}/annotations`, y el
+            # resumen se renderiza en la pagina del run. Ademas son lo primero que ve quien
+            # abre el run en el navegador, sin desplegar un log de miles de lineas.
+            $cola = @(Get-Content -Path $log -ErrorAction SilentlyContinue |
+              Where-Object { $_.Trim() -ne "" } |
+              Select-Object -Last 20)
+            $ErrorActionPreference = "Continue"
+
+            # La valla del bloque de codigo es de TILDES y no de backticks a proposito. En
+            # una cadena doble de PowerShell el backtick es el caracter de escape, asi que
+            # escribir ``"````text"`` produce DOS backticks (`` ` ` -> '``' ``) y escribir
+            # ``"`tauri build`"`` produce un TAB (`` `t ``) seguido de "auri build". Se
+            # comprobo ejecutando este paso: el resumen salia con `## <TAB>auri build`.
+            # Markdown acepta vallas de tilde, y aqui no hay nada que escapar.
+            @("## tauri build fallo (codigo $code)", "",
+              "Ultimas lineas del log de tauri-build.log:", "",
+              "~~~~text") + $cola + @("~~~~") |
+              Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+            # `%25`, `%0D` y `%0A` son los escapes de los comandos de workflow: un `%` a pelo
+            # rompe el formato de la anotacion. El `%` se sustituye primero, antes que los
+            # otros dos, porque los escapes que estos generan contienen `%` ellos mismos.
+            foreach ($linea in $cola) {
+              $t = $linea -replace '%', '%25' -replace "`r", '%0D' -replace "`n", ''
+              if ($t.Length -gt 900) { $t = $t.Substring(0, 900) + ' ...' }
+              Write-Host "::error title=tauri build::${t}"
+            }
+
             $ErrorActionPreference = "Stop"
-            Write-Error "tauri build fallo con codigo $code. Log completo en $log (tambien como artefacto)"
+            Write-Error "tauri build fallo con codigo $code. Log completo en $log (tambien como artefacto)."
             exit $code
           }
 
