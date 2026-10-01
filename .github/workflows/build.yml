@@ -19,15 +19,6 @@ env:
   # MinGW de abajo. Poner aqui una ruta absoluta la dejaria fija para el develop local, donde
   # el toolchain vive en otro sitio.
   CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: gcc
-  # Mitigacion del punto que la documentacion del repo senala como el que agota la memoria
-  # ("lo que se agota es la memoria durante el enlazado"): `ld` de GNU mantiene en RAM toda
-  # la tabla de simbolos del binario, y un ejecutable de Tauri con MinGW es enorme. Con
-  # `--no-keep-memory` vuelve a leer la tabla del disco en vez de cachearla, y
-  # `--reduce-memory-overheads` recorta las estructuras internas. El precio es unos segundos
-  # mas de enlazado; la alternativa es un proceso terminado por el sistema operativo
-  # (0xC0000409) sin mensaje, que es lo que dejo el log cortado en `Compiling ringbuf`.
-  # Solo afectan al enlazado, no a la correccion del binario resultante.
-  RUSTFLAGS: "-C link-arg=-Wl,--no-keep-memory -C link-arg=-Wl,--reduce-memory-overheads"
 
 jobs:
   build-and-release:
@@ -126,6 +117,42 @@ jobs:
             exit 1
           }
           Write-Host "gcc verificado: $gccVer en $gccDir"
+
+      # Arregla el fallo que tumbo las ejecuciones 2 a 5. `embed-resource` (via `tauri-build`)
+      # elige su compilador de recursos con un `#[cfg(target_env = "msvc")]`, o sea por el
+      # HOST con el que se compilo el crate, no por el target. El runner tiene host MSVC, asi
+      # que usa `rc.exe`, nombra la salida `resource.lib` y le mete formato de recursos de
+      # Microsoft; el `ld` de GNU lo rechaza con `file format not recognized` y muere el
+      # enlazado. En local no pasa porque el host es GNU y ahi entra por la rama `windres`.
+      # `scripts/rc-shim.c` traduce los argumentos estilo MSVC a windres y devuelve COFF, que
+      # es lo que `ld` si sabe leer. Se exporta en `RC`, que es la variable que esa rama
+      # respeta.
+      - name: Build rc-shim (resource compiler bridge for GNU cross builds)
+        shell: pwsh
+        run: |
+          $shim = Join-Path $env:RUNNER_TEMP "rc-shim.exe"
+          & gcc -O2 -o $shim scripts/rc-shim.c
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $shim)) {
+            throw "no se pudo compilar scripts/rc-shim.c"
+          }
+
+          # Prueba de humo, y con la cabecera comprobada: si el shim produjese algo que no es
+          # COFF, el fallo no se veria hasta el enlazado de tauri, diez minutos despues y con
+          # el mismo mensaje opaco que se acaba de diagnosticar. Aqui se ve en un segundo.
+          $rc = Join-Path $env:RUNNER_TEMP "rc-shim-smoke.rc"
+          $obj = Join-Path $env:RUNNER_TEMP "rc-shim-smoke.lib"
+          Set-Content -Path $rc -Value '1 ICON "icon.ico"' -Encoding ascii
+          & $shim /fo $obj /I "src-tauri/icons" $rc
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $obj)) {
+            throw "el shim no compilo el .rc de prueba"
+          }
+          $cabecera = [System.IO.File]::ReadAllBytes($obj)[0..1]
+          if ($cabecera[0] -ne 0x64 -or $cabecera[1] -ne 0x86) {
+            throw ("el shim no produjo un COFF x86_64 (cabecera {0:X2}{1:X2})" -f $cabecera[0], $cabecera[1])
+          }
+
+          "RC=$shim" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "rc-shim verificado en $shim y exportado como RC"
 
       # Tauri v2 NO usa el NSIS del sistema: descarga el suyo a `%LOCALAPPDATA%\tauri\NSIS`
       # y empaqueta con ese. Este paso existe para que el log diga QUE NSIS hay y de donde
