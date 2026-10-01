@@ -11,6 +11,14 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # El host de windows-latest es msvc y el target es gnu. rustc YA usa `gcc` por defecto
+  # para `x86_64-pc-windows-gnu`, asi que esto no arregla nada por si solo: es una cincha
+  # para que el enlazador no dependa de como se llame el primer gcc que aparezca en el PATH
+  # (la imagen del runner trae mas de uno: el de `C:\ProgramData\mingw64` y el de MSYS2).
+  # Un valor sin ruta es a proposito: se resuelve en el PATH, que es lo que fija el paso de
+  # MinGW de abajo. Poner aqui una ruta absoluta la dejaria fija para el develop local, donde
+  # el toolchain vive en otro sitio.
+  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: gcc
 
 jobs:
   build-and-release:
@@ -39,19 +47,16 @@ jobs:
       # confiar en lo que traiga la imagen del runner, que cambia sin avisar.
       #
       # Chocolatey NO deja los binarios en su propio `bin`: el paquete `mingw` desempaqueta
-      # el toolchain en `C:\ProgramData\mingw64\mingw64\bin` y deja un shim en
-      # `C:\ProgramData\chocolatey\bin`. Por eso el `Test-Path` contra
+      # el toolchain en `C:\ProgramData\mingw64\mingw64\bin`. Por eso el `Test-Path` contra
       # `chocolatey\bin\gcc.exe` fallaba aunque la instalacion fuese correcta: ese shim no
-      # existe en todas las versiones del paquete. Se busca donde esta de verdad y, si la
-      # estructura de extraccion cambia, se rastrea en el arbol de chocolatey en vez de
-      # renunciar.
+      # existe en todas las versiones del paquete.
       #
-      # `windows-latest` YA trae MinGW en esa misma ruta, asi que normalmente se usa el de la
-      # imagen y no se instala nada: se ahorra una descarga y el paso deja de depender de la red.
-      # El precio es que la version de gcc es la que traiga el runner y no la fijada aqui, que
-      # es justo lo que este comentario antes daba por bueno. Si un dia el linkado dejara de
-      # funcionar con la gcc de la imagen, el arreglo no es anadir rutas: es quitar el `if` y
-      # dejar `choco install mingw` siempre, para forzar la version.
+      # `upgrade`, NO `install`. El paquete `mingw` tiene 32 versiones publicadas y la ultima
+      # es la 16.1.0, pero `choco install` sobre un paquete YA INSTALADO no actualiza nada:
+      # responde "already installed" y se deja la version que traia la imagen. La imagen de
+      # windows-latest trae una gcc mucho mas antigua, y `upgrade` si trae la moderna.
+      # `upgrade` es idempotente -si ya esta al dia no hace nada y no falla-, a diferencia de
+      # `install --force`, que rehace la instalacion entera en cada ejecucion.
       #
       # La ruta va a `GITHUB_PATH`, que es lo que hace que `cargo` y `tauri build` la vean en
       # los pasos SIGUIENTES: cambiar `$env:PATH` dentro del `run` solo afecta a este proceso.
@@ -64,12 +69,10 @@ jobs:
       - name: Setup MinGW (GCC for x86_64-pc-windows-gnu)
         shell: pwsh
         run: |
-          $mingwBin = "C:\ProgramData\mingw64\mingw64\bin"
-          if (-not (Test-Path "$mingwBin\gcc.exe")) {
-            Write-Host "Instalando mingw via Chocolatey..."
-            choco install mingw --no-progress -y
-          }
+          choco upgrade mingw --no-progress -y
+          Write-Host "choco upgrade mingw devolvio $LASTEXITCODE (0 tambien cuando ya estaba al dia)"
 
+          $mingwBin = "C:\ProgramData\mingw64\mingw64\bin"
           # `$gccDir` es el directorio que de verdad acabo en el PATH. Se lleva por separado
           # porque el mensaje de error tiene que nombrar ESE, no `$mingwBin`: si el fallo viene
           # del fallback, decir "no se ejecuta desde C:\ProgramData\mingw64..." manda a mirar
@@ -98,6 +101,43 @@ jobs:
           # importa es que `gcc` CORRA, y que corra el que se acaba de poner en el PATH.
           & gcc --version
           if ($LASTEXITCODE -ne 0) { throw "gcc no se ejecuta desde el PATH ($gccDir)" }
+
+          # Y ademas que sea MODERNO. Sin esta comprobacion, una gcc de 8.x que `choco upgrade`
+          # no llega a tocar se lleva el fallo cinco minutos mas adelante, dentro del linkado,
+          # con un mensaje que no menciona la version. Aqui se ve al instante y con nombre.
+          # El 13 es el minimo que se ha visto compilar este grafo; el 16.1.0 es lo que instala
+          # el paquete.
+          $gccVer = (& gcc -dumpfullversion 2>&1 | Select-Object -First 1)
+          if ("$gccVer" -notmatch '^\s*(\d+)') {
+            Write-Error "No se pudo leer la version de gcc desde $gccDir (devolvio '$gccVer')"
+            exit 1
+          }
+          if ([int]$Matches[1] -lt 13) {
+            Write-Error "gcc $gccVer en $gccDir es demasiado antiguo para x86_64-pc-windows-gnu con este grafo de dependencias"
+            exit 1
+          }
+          Write-Host "gcc verificado: $gccVer en $gccDir"
+
+      # Tauri v2 NO usa el NSIS del sistema: descarga el suyo a `%LOCALAPPDATA%\tauri` y
+      # empaqueta con ese. Por eso esto no es lo que arregla un fallo de empaquetado, y por
+      # eso se verifica en vez de instalar siempre: `choco install nsis` sobre una imagen que
+      # ya lo tiene puede devolver codigo distinto de cero y tumbar un build que iba bien.
+      # Si no esta, se instala y se avisa, pero NO se para aqui: que lo decida el paso de
+      # empaquetado, que es quien sabe si lo necesitaba.
+      - name: Ensure NSIS is available
+        shell: pwsh
+        run: |
+          if (Get-Command makensis -ErrorAction SilentlyContinue) {
+            Write-Host "makensis ya disponible en el PATH: $((Get-Command makensis).Source)"
+          } else {
+            Write-Host "makensis no esta en el PATH; instalando NSIS con Chocolatey..."
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "aviso: 'choco install nsis' devolvio $LASTEXITCODE. No es fatal: tauri usa su propio NSIS."
+            } else {
+              Write-Host "NSIS instalado."
+            }
+          }
 
       # Solo se cachea el registro de crates, NO `src-tauri/target/`. El build de este
       # proyecto es de release y el perfil por defecto no lleva incremental
@@ -144,14 +184,57 @@ jobs:
       - name: Build Next.js Static Export
         run: npm run build
 
+      # `--bundles nsis` explicito: `tauri.conf.json` pone `"targets": "all"`, asi que
+      # sin esto el runner construye tambien el MSI, que ni se inspecciona ni se publica
+      # y aqui es el paso mas caro (el linkado con poco paralelismo).
+      #
+      # `--verbose` y el volcado a `tauri-build.log` van a proposito, por un motivo
+      # concreto: la API de GitHub exige autenticacion para bajar los logs de un job (403
+      # sin token), asi que hasta ahora el unico dato que hubo fue "failed" sin saber por
+      # que. El artefacto de debajo deja el error legible aunque la API no responda.
+      #
+      # Las dos lineas de `$ErrorActionPreference` NO son ruido. GitHub antepone
+      # `$ErrorActionPreference = 'stop'` a los pasos `pwsh`, y desde PowerShell 7.3
+      # `$PSNativeCommandUseErrorActionPreference` puede convertir un comando nativo con
+      # salida distinta de cero en error TERMINANTE. Si eso ocurre aqui, la excepcion salta
+      # en la tuberia, `$LASTEXITCODE` no llega a leerse y el paso muere con el texto de
+      # PowerShell en vez de con el codigo real de `tauri`: el diagnostico que se pretendia
+      # guardar se pierde justo en el caso para el que existe. Se desactivan las dos cosas
+      # unicamente alrededor de la llamada; el resto del paso sigue con `stop`.
       - name: Build Tauri NSIS Package
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
         run: |
-          # `--bundles nsis` explicito: `tauri.conf.json` pone `"targets": "all"`, asi que
-          # sin esto el runner construye tambien el MSI, que ni se inspecciona ni se
-          # publica y aqui es el paso mas caro (el linkado con poco paralelismo).
-          npm run tauri build -- --target x86_64-pc-windows-gnu --bundles nsis
+          $log = "tauri-build.log"
+          $ErrorActionPreference = "Continue"
+          if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+            $PSNativeCommandUseErrorActionPreference = $false
+          }
+
+          & npm run tauri build -- --target x86_64-pc-windows-gnu --bundles nsis --verbose *>&1 |
+            Tee-Object -FilePath $log
+
+          # En una instruccion aparte a proposito: `Tee-Object` es un cmdlet y no toca
+          # `$LASTEXITCODE`, asi que justo despues de la tuberia el valor sigue siendo el
+          # del ultimo comando NATIVO, que es `npm`.
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $ErrorActionPreference = "Stop"
+            Write-Error "tauri build fallo con codigo $code. Log completo en $log (tambien como artefacto)"
+            exit $code
+          }
+
+      # El log se sube siempre, y no solo en fallo: un fallo de configuracion anterior al
+      # `Tee-Object` deja el fichero sin crear, y `if-no-files-found: ignore` evita que eso
+      # se convierta en un segundo fallo mas molesto que el primero.
+      - name: Upload Tauri build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-build-log
+          path: tauri-build.log
+          if-no-files-found: ignore
 
       - name: Locate and inspect NSIS artifacts
         id: artifacts
