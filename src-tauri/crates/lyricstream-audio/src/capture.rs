@@ -683,16 +683,25 @@ impl AudioEngine {
 
   /// Detiene la captura y espera a que los dos hilos terminen.
   pub fn stop(&self) -> Result<(), String> {
-    let mut session = Self::lock(&self.session);
-    if let Some(current) = session.take() {
-      current.shutdown();
+    let session = self.session.lock();
+    if let Ok(mut guard) = session {
+      if let Some(current) = guard.take() {
+        current.shutdown();
+      } else {
+        log::debug!("stop_capture sin captura activa");
+      }
     } else {
-      log::debug!("stop_capture sin captura activa");
+      log::warn!("no se pudo bloquear session para detener la captura");
     }
-    *Self::lock(&self.status) = CaptureStatus {
-      output_sample_rate: TARGET_SAMPLE_RATE,
-      ..Default::default()
-    };
+    let status = self.status.lock();
+    if let Ok(mut guard) = status {
+      *guard = CaptureStatus {
+        output_sample_rate: TARGET_SAMPLE_RATE,
+        ..Default::default()
+      };
+    } else {
+      log::warn!("no se pudo bloquear status para restablecerlo");
+    }
     self.shared.reset_levels();
     Ok(())
   }
@@ -742,8 +751,9 @@ impl AudioEngine {
 fn shutdown_thread(stop: mpsc::Sender<()>, handle: JoinHandle<()>, label: &str) {
   let _ = stop.send(());
   if let Err(err) = handle.join() {
-    log::error!("el hilo {label} de audio ha terminado con error: {err:?}");
+    log::warn!("no se pudo unir el hilo {label}: {err:?}");
   }
+}
 }
 
 fn collect_devices<I: Iterator<Item = cpal::Device>>(

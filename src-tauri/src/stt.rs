@@ -416,7 +416,11 @@ fn spawn_forwarder(app: AppHandle, receiver: Receiver<TranscriptionSegment>) -> 
         }
       }
     })
-    .expect("no se pudo crear el hilo stt-forwarder")
+    .unwrap_or_else(|err| {
+      log::error!("no se pudo crear el hilo stt-forwarder: {err}");
+      // Crear un hilo dummy que no haga nada para no romper el teardown.
+      std::thread::spawn(|| {})
+    })
 }
 
 /// Emisor de progreso espaciado en el tiempo.

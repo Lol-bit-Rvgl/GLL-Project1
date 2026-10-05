@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 /**
  * La ventana unica de la app: barra de control, canal de texto, vumetro y export.
@@ -24,8 +24,10 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { ControlBar } from "@/components/ControlBar";
 import { ExportMenu } from "@/components/ExportMenu";
 import { MiniOverlay } from "@/components/MiniOverlay";
+import { AudioLab } from "@/components/screens/AudioLab";
+import { History } from "@/components/screens/History";
+import { LiveStream } from "@/components/screens/LiveStream";
 import { DockedPlayer } from "@/components/player/DockedPlayer";
-import { TranscriptStream } from "@/components/TranscriptStream";
 import { VuMeter } from "@/components/VuMeter";
 import { hayTauri, invoke, listen } from "@/lib/bridge";
 import { bytes } from "@/lib/format";
@@ -95,6 +97,7 @@ export default function Home() {
   // `always_on_top` los fija el SO y la UI solo los refleja. Aqui se guarda una copia
   // para pintar, y se sincroniza al montar y con el evento `mini-mode-changed`.
   const [mini, setMini] = useState(false);
+  const [activeScreen, setActiveScreen] = useState<"live" | "history" | "lab">("live");
 
   const refresh = useCallback(async () => {
     try {
@@ -364,7 +367,7 @@ export default function Home() {
     // hermano en vez de fondo del `main`: el `main` es opaco y taparia su propio
     // gradiente.
     <main className="relative flex h-dvh flex-col overflow-hidden bg-obsidian text-snow">
-      <div className="ambient-glow" aria-hidden="true" />
+
       <ControlBar
         phase={phase}
         source={source}
@@ -437,32 +440,62 @@ export default function Home() {
         </div>
       )}
 
-      <TranscriptStream
-        blocks={transcript.blocks}
-        interim={transcript.interim}
-        speaking={transcript.speaking}
-        stickToBottom={transcript.stickToBottom}
-        onStickChange={transcript.setStick}
-        engineReady={engine?.real_inference ?? false}
-        capturing={capturing}
-        query={transcript.query}
-        setQuery={transcript.setQuery}
-        searchOpen={transcript.searchOpen}
-        matchCount={transcript.matchCount}
-        onToggleBookmark={transcript.toggleBookmark}
-        onDismissSearch={transcript.closeSearch}
-      />
+            {/* Selector de pantallas */}
+      <div className="flex items-center gap-1 border-b border-neon/12 bg-panel/40 px-6 py-1.5 backdrop-blur">
+        {[
+          { id: "live" as const, label: "Lienzo en Vivo" },
+          { id: "history" as const, label: "Sesiones y Archivo" },
+          { id: "lab" as const, label: "Laboratorio de Audio" },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveScreen(tab.id)}
+            aria-pressed={activeScreen === tab.id}
+            className={`rounded px-2.5 py-1 text-xs transition-colors ${activeScreen === tab.id ? "bg-neon/20 text-snow" : "text-slate-ink hover:bg-neon/10 hover:text-snow"}`}
 
-      {/*
-        El menu de exportar se queda en la franja de arriba del dock, y NO dentro de el.
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-        Lleva el recuento de palabras, que cambia con cada bloque cerrado. Si viviera
-        dentro de `DockedPlayer` pasaria a formar parte del subarbol que se repinta cuatro
-        veces por segundo con la posicion del audio, y el historial entero se repintaria
-        con cada avance de la cancion. Esa separacion es el motivo de que el motor este
-        fuera de React; este menu es la prueba de que sigue valiendo. El dock lleva solo
-        el idioma, que cambia una vez cada varias frases.
-      */}
+      {activeScreen === "live" ? (
+        <LiveStream
+          blocks={transcript.blocks}
+          interim={transcript.interim}
+          speaking={transcript.speaking}
+          stickToBottom={transcript.stickToBottom}
+          onStickChange={transcript.setStick}
+          engineReady={engine?.real_inference ?? false}
+          capturing={capturing}
+          query={transcript.query}
+          setQuery={transcript.setQuery}
+          searchOpen={transcript.searchOpen}
+          matchCount={transcript.matchCount}
+          onToggleBookmark={transcript.toggleBookmark}
+          onDismissSearch={transcript.closeSearch}
+          language={engine?.language ?? language}
+          endMs={transcript.endMs}
+          onClear={transcript.clear}
+        />
+      ) : activeScreen === "history" ? (
+        <History
+          blocks={transcript.blocks}
+          interim={transcript.interim}
+          language={engine?.language ?? language}
+          endMs={transcript.endMs}
+          onClear={transcript.clear}
+        />
+      ) : (
+        <AudioLab
+          source={source}
+          capturing={capturing}
+          language={language}
+          onLanguageChange={onLanguageChange}
+          busy={busy}
+        />
+      )}
       <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-neon/12 bg-panel/60 px-6 py-2.5 backdrop-blur">
         <VuMeter
           active={capturing}
@@ -513,9 +546,17 @@ function DownloadBar({ progress }: { progress: DownloadProgress }) {
       <span className="font-mono text-[10px] text-slate-ink tabular-nums">
         {bytes(progress.downloaded)}
         {progress.total !== null && ` de ${bytes(progress.total)}`}
-        {" · "}
+        {" Â· "}
         {Math.round(percent)}%
       </span>
     </div>
   );
 }
+
+
+
+
+
+
+
+
