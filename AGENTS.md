@@ -14,10 +14,21 @@ Antes de `cargo` o `npm run tauri`, hay que poner esto en el `PATH` de la sesion
 
 ```powershell
 $env:CARGO_HOME="D:\Rust\cargo"; $env:RUSTUP_HOME="D:\Rust\rustup"
-$env:PATH="$env:PATH;D:\Rust\mingw64\mingw64\bin;D:\Rust\cargo\bin"
+$env:PATH="$env:PATH;D:\mingw64\bin;D:\Rust\cargo\bin"
 ```
 
 Sin esto, `cargo` no aparece: Rust no esta en el PATH del sistema.
+
+El toolchain es `stable-x86_64-pc-windows-gnu` (cargo/rustc 1.99.0) con `CARGO_HOME` en
+`D:\Rust\cargo` y `RUSTUP_HOME` en `D:\Rust\rustup`.
+
+**El linker NO esta en `D:\Rust`.** MinGW GCC 16.2 vive en `D:\mingw64\bin`, y el binario de
+enlazado es `D:\mingw64\mingw64\bin\ld.exe`. Con la ruta que aparece en versiones anteriores de este
+fichero (`D:\Rust\mingw64\mingw64\bin`) el enlazado falla. Es ademas la unica de las dos rutas del
+sistema **sin espacios ni caracteres no-ASCII**, y tiene que seguir asi: cuando una ruta del linker
+contiene un espacio o una tilde, `ld.exe` desfragmenta mal los argumentos que le pasa `gcc` y falla
+con errores que no mencionan la ruta (missing manifest, símbolos duplicados, `cannot find -l...`).
+Antes de tocar rutas de MinGW, comprobar que el prefijo es ASCII puro.
 
 Restricciones del equipo: 8 GB de RAM fisica (7,71 GB medidos) de los que solo queda del orden de
 1 GB libres en los picos de compilacion, target `x86_64-pc-windows-gnu`, MinGW GCC 16.2. La cifra
@@ -427,9 +438,15 @@ npm run build
 npm run test:estructural         # 23 tests sobre el fuente de los componentes y de Rust
 npm run test:mutacion            # comprueba que esos 23 tests FALLAN sobre el codigo roto
 cargo fmt --all --check --manifest-path src-tauri\Cargo.toml   # 2 espacios, ancho 100
-cargo check --all-targets --manifest-path src-tauri\Cargo.toml
-cargo test --manifest-path src-tauri\Cargo.toml                 # 118 tests
+cargo check --all-targets --manifest-path src-tauri\Cargo.toml   # 0 errores, 0 warnings
+cargo test --manifest-path src-tauri\Cargo.toml                 # 118 passed, 0 failed
 ```
+
+Estado verificado de la suite: **118 passed, 0 failed** repartidos en 7 binarios con tests
+(34 + 5 + 17 + 23 + 8 + 24 + 7); los demos crates compilan a 0 tests. `cargo fmt --all --check` sale
+con codigo 0. Los binarios que salen con `0 tests` son demos crates y harnesses sin casos: el del crate raiz
+lleva `test = false` porque el enlazador de este equipo no puede arrancar el harness de test de un
+binario que enlace Tauri.
 
 ## Lo que el banco temporal **no** caza, y `pruebas/` si
 
