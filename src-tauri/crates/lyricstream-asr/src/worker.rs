@@ -267,12 +267,7 @@ impl SttWorker {
       .spawn(move || {
         run(source, engine, config, worker_shared, segment_tx, stop_rx);
       })
-      .map_err(|err| format!("no se pudo crear el hilo stt-worker: {err}"));
-
-    let handle = match handle {
-      Ok(h) => h,
-      Err(e) => panic!("{}", e), // kept for now? but we prefer Result in production
-    };
+      .expect("no se pudo crear el hilo stt-worker");
 
     Self {
       shared,
@@ -283,8 +278,8 @@ impl SttWorker {
   }
 
   /// Receptor de fragmentos, para reenviarlos como evento de Tauri.
-  pub fn segments(&self) -> Option<&Receiver<TranscriptionSegment>> {
-    self.segments.as_ref()
+  pub fn segments(&self) -> &Receiver<TranscriptionSegment> {
+    self.segments.as_ref().expect("el receptor ya fue tomado")
   }
 
   /// Toma el receptor. Para tests o para un reenviador dedicado.
