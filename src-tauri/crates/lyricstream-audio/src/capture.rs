@@ -683,16 +683,20 @@ impl AudioEngine {
 
   /// Detiene la captura y espera a que los dos hilos terminen.
   pub fn stop(&self) -> Result<(), String> {
-    let mut session = Self::lock(&self.session);
-    if let Some(current) = session.take() {
+    let current = {
+      let mut session = Self::lock(&self.session);
+      let current = session.take();
+      *Self::lock(&self.status) = CaptureStatus {
+        output_sample_rate: TARGET_SAMPLE_RATE,
+        ..Default::default()
+      };
+      current
+    };
+    if let Some(current) = current {
       current.shutdown();
     } else {
       log::debug!("stop_capture sin captura activa");
     }
-    *Self::lock(&self.status) = CaptureStatus {
-      output_sample_rate: TARGET_SAMPLE_RATE,
-      ..Default::default()
-    };
     self.shared.reset_levels();
     Ok(())
   }
