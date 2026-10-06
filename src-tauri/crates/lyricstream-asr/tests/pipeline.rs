@@ -612,7 +612,8 @@ fn el_worker_produce_segmentos_validos_sobre_audio_sintetico() {
     Box::new(source),
     Box::new(CountingEngine::default()),
     config,
-  );
+  )
+  .expect("no se pudo crear el hilo stt-worker");
   let segments = drain_all(worker.segments(), Duration::from_secs(5));
   let stats = worker.stats();
   worker.stop();
@@ -702,7 +703,8 @@ fn el_worker_ignora_ruido_sin_producir_texto() {
     Box::new(source),
     Box::new(CountingEngine::default()),
     config,
-  );
+  )
+  .expect("no se pudo crear el hilo stt-worker");
   let segments = drain_all(worker.segments(), Duration::from_millis(800));
   let stats = worker.stats();
   worker.stop();
@@ -732,7 +734,8 @@ fn el_worker_cierra_el_segmento_al_parar() {
     Box::new(source),
     Box::new(CountingEngine::default()),
     config,
-  );
+  )
+  .expect("no se pudo crear el hilo stt-worker");
   // Se deja hablar un poco y se corta la captura de golpe.
   std::thread::sleep(Duration::from_millis(600));
   let segments = drain_all(worker.segments(), Duration::from_millis(200));
@@ -779,7 +782,8 @@ fn el_worker_sobrevive_a_un_motor_que_falla() {
     Box::new(source),
     Box::new(FailingEngine { calls: 0 }),
     config,
-  );
+  )
+  .expect("no se pudo crear el hilo stt-worker");
   let segments = drain_all(worker.segments(), Duration::from_secs(3));
   let stats = worker.stats();
   worker.stop();
@@ -829,7 +833,8 @@ fn el_worker_propaga_el_idioma_al_motor() {
     language: Language::Es,
     ..Default::default()
   };
-  let mut worker = SttWorker::start(Box::new(source), Box::new(LanguageSpy::default()), config);
+  let mut worker = SttWorker::start(Box::new(source), Box::new(LanguageSpy::default()), config)
+    .expect("no se pudo crear el hilo stt-worker");
   let _ = drain_all(worker.segments(), Duration::from_millis(400));
   worker.set_language(Language::En);
   assert_eq!(worker.language(), Language::En);
@@ -860,7 +865,8 @@ fn el_worker_conserva_la_memoria_acotada_durante_una_voz_larga() {
     Box::new(source),
     Box::new(CountingEngine::default()),
     config,
-  );
+  )
+  .expect("no se pudo crear el hilo stt-worker");
   let segments = drain_all(worker.segments(), Duration::from_secs(4));
   let stats: WorkerStats = worker.stats();
   worker.stop();

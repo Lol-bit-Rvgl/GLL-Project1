@@ -251,11 +251,15 @@ pub struct SttWorker {
 
 impl SttWorker {
   /// Arranca el worker con su propio hilo.
+  ///
+  /// Devuelve error si el sistema operativo no concede el hilo; el llamador decide
+  /// si eso es recuperable, y el estado nunca queda a medias porque aqui todavia no
+  /// se ha tocado nada compartido.
   pub fn start(
     source: Box<dyn SampleSource>,
     engine: Box<dyn SttEngine>,
     config: WorkerConfig,
-  ) -> Self {
+  ) -> std::io::Result<Self> {
     let shared = Arc::new(Shared::new(config.language));
     let (segment_tx, segments) = mpsc::channel();
     let (stop, stop_rx) = mpsc::channel();
@@ -266,15 +270,14 @@ impl SttWorker {
       .name("stt-worker".to_string())
       .spawn(move || {
         run(source, engine, config, worker_shared, segment_tx, stop_rx);
-      })
-      .expect("no se pudo crear el hilo stt-worker");
+      })?;
 
-    Self {
+    Ok(Self {
       shared,
       segments: Some(segments),
       stop: Some(stop),
       handle: Some(handle),
-    }
+    })
   }
 
   /// Receptor de fragmentos, para reenviarlos como evento de Tauri.

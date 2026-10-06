@@ -232,12 +232,13 @@ impl SttState {
       language: self.language(),
       ..Default::default()
     };
-    let mut worker = SttWorker::start(source, engine, config);
+    let mut worker = SttWorker::start(source, engine, config)
+      .map_err(|err| format!("no se pudo crear el hilo stt-worker: {err}"))?;
     // El receptor se lleva el reenviador; el worker deja de exponerlo.
     let receiver = worker
       .take_segments()
       .ok_or_else(|| "el worker no entrega segmentos".to_string())?;
-    let forwarder = spawn_forwarder(app.clone(), receiver);
+    let forwarder = spawn_forwarder(app.clone(), receiver)?;
 
     *lock(&self.forwarder_thread) = Some(forwarder);
     *lock(&self.worker) = Some(worker);
@@ -405,7 +406,10 @@ fn build_engine(
 /// El motor puede producir mas rapido de lo que la UI consume; el canal es
 /// ilimitado y este hilo es el unico que llama a `emit`, de modo que nunca se
 /// bloquea la inferencia por el frontend.
-fn spawn_forwarder(app: AppHandle, receiver: Receiver<TranscriptionSegment>) -> JoinHandle<()> {
+fn spawn_forwarder(
+  app: AppHandle,
+  receiver: Receiver<TranscriptionSegment>,
+) -> Result<JoinHandle<()>, String> {
   std::thread::Builder::new()
     .name("stt-forwarder".to_string())
     .spawn(move || {
@@ -416,7 +420,7 @@ fn spawn_forwarder(app: AppHandle, receiver: Receiver<TranscriptionSegment>) -> 
         }
       }
     })
-    .expect("no se pudo crear el hilo stt-forwarder")
+    .map_err(|err| format!("no se pudo crear el hilo stt-forwarder: {err}"))
 }
 
 /// Emisor de progreso espaciado en el tiempo.

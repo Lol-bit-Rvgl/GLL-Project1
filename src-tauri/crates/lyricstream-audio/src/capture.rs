@@ -742,7 +742,7 @@ impl AudioEngine {
 fn shutdown_thread(stop: mpsc::Sender<()>, handle: JoinHandle<()>, label: &str) {
   let _ = stop.send(());
   if let Err(err) = handle.join() {
-    log::error!("el hilo {label} de audio ha terminado con error: {err:?}");
+    log::warn!("el hilo {label} de audio ha terminado con error: {err:?}");
   }
 }
 
